@@ -1,6 +1,6 @@
-# C64 platformer demo
+# Smashy Smashy
 
-A small C64 platformer written in Prog8. Claude writes the code; the user knows Prog8 and reviews it.
+A small single-screen C64 platformer written in Prog8. Claude writes the code; the user knows Prog8 and reviews it.
 
 ## Toolchain (all project-local, in `tools/`)
 

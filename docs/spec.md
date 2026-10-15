@@ -1,4 +1,6 @@
-# Technical spec: C64 single-screen platformer
+# Technical spec: Smashy Smashy
+
+A single-screen C64 platformer.
 
 Source design: `platformer-game.txt`. This document turns it into implementation decisions for Prog8 12.3.4 on a PAL C64.
 Items marked **[DECIDE]** are proposals waiting for the designer's confirmation. Items marked **[TUNE]** are starting values expected to change after playtesting.
@@ -253,7 +255,7 @@ TITLE --fire--> NEW_GAME --> LEVEL_START (READY?) --> PLAYING
 PLAYING --10 treasures--> LEVEL_COMPLETE --> LEVEL_START (READY?, level+1, +60 s)
 PLAYING --time 0--> GAME_OVER --fire--> TITLE
 ```
-- **TITLE**: minimal "press fire" screen, needed to seed the RNG and to restart. Shows the session high score.
+- **TITLE**: shows the game's name, **SMASHY SMASHY**, "PRESS FIRE", and the session high score. Needed to seed the RNG and to restart. Can stay simple: hi-res text from the HUD font (chars 0-63 are the ROM screen codes, so all letters are available).
 - **Pause**: Run/Stop toggles pause during PLAYING (edge-triggered, press again to resume). Everything freezes, including the timer; "PAUSED" is shown. Ignored during transitions.
 - **LEVEL_COMPLETE**: enemies vanish. Non-floor tiles are erased in random order, ~8 tiles per frame (about 1 s). The player floats to the start.
 - **LEVEL_START** ("READY?" pause), used for every level including the first:

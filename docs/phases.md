@@ -297,7 +297,7 @@ Done when:
 
 Build:
 - States TITLE, NEW_GAME, LEVEL_START, PLAYING, LEVEL_COMPLETE, GAME_OVER.
-- Title screen (seeds RNG on fire), dissolve transition (~8 tiles/frame), player floats to start, then the 3 s "READY?" pause during which the next level is generated and drawn (spec §9). Timer paused during all of it. READY? also runs before the first level.
+- Title screen with the name SMASHY SMASHY (seeds RNG on fire), dissolve transition (~8 tiles/frame), player floats to start, then the 3 s "READY?" pause during which the next level is generated and drawn (spec §9). Timer paused during all of it. READY? also runs before the first level.
 - No-kill bonus +2500, level counter, enemy speed and respawn scaling.
 - Pause on Run/Stop (toggle, timer frozen, "PAUSED" shown). Read Run/Stop (and F1 in debug builds) directly from the keyboard matrix (`$DC00`/`$DC01`) instead of through the KERNAL.
 - Stop chaining the frame IRQ to the KERNAL IRQ (`frame_irq` returns `false`). Measured KERNAL IRQ cost was 161-204 cycles per frame with no key held, more while a key is held. Replace every use of the jiffy clock (`cbm.TIME_LO`, e.g. in `FRAME_STATS` and level-generation timing) with a frame counter incremented by `frame_irq`. Keep the KERNAL ROM banked in.
