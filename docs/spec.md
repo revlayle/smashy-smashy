@@ -337,6 +337,7 @@ None at the moment.
 - Stomp (landing on an enemy without fast-fall): 24 px bounce, no score, enemy survives, carried treasure drops.
 - Air control: full, at run speed, except during fast-fall, which drops straight down.
 - Timer runs during the post-hit float; the float is fast (4 px/f, < 1 s worst case).
+- Bonks chain: a bonk's bounce can land on another enemy for another bonk. Bonks score nothing and don't reset the fast-fall kill chain (only landing on a tile does).
 - Enemy AI: platform-map navigation with roles (chasers, ambusher, hunters), built in two phases (5a simple, 5b navigation).
 - Carriers flee to a hideout far from the player. Side contact with a carrier hits the player; only a stomp or kill frees the treasure. Tiring after 20 s is a Claude default, open to removal.
 - Drilling: destroying a damaged tile with a fast-fall keeps the player fast-falling through the hole.
