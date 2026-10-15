@@ -166,7 +166,7 @@ Done when:
 - Generator buffers are normal arrays in program RAM (about 1.1 KB of BSS), not the `$C400` game RAM area. Code+data `$0801-$2917`, BSS to `$2DD9`. No `floats` import. The compiler prints 8 "condition is always true/false" warnings, all from `const bool` switches.
 
 ## Phase 5a: Enemies with simple AI
-**Status:** not started
+**Status:** done
 **Spec:** §4 actors, §5 hit and float, §6 (contact, movement, simple AI, respawn; not navigation AI or treasure handling)
 
 Build:
@@ -177,13 +177,43 @@ Build:
 - Respawn with 1 s warning flicker (inactive, no contact). Unlimited bonks.
 
 Done when:
-- [ ] Screenshot: 5 enemies spawned ≥ 8 tiles from the player start.
-- [ ] Scripted test: fast-fall onto an enemy → enemy gone, +200, player launched.
-- [ ] Scripted test: normal fall onto an enemy → bounce, enemy survives, no points.
-- [ ] Scripted test: walking into an enemy → time -10, player floats back, then flickers.
-- [ ] Scripted test: jumping up into an enemy from below → hit.
-- [ ] Scripted test: a respawning enemy flickers for 1 s and the player can pass through it without any contact result.
-- [ ] Frame budget holds with 5 enemies: no slowdown. Measure the worst frame in raster lines (read the raster line at the start and end of the frame update, keep the maximum, show it on the HUD in a test build) and note it. The pre-phase-5 baseline was 58 lines.
+- [x] Screenshot: 5 enemies spawned ≥ 8 tiles from the player start.
+- [x] Scripted test: fast-fall onto an enemy → enemy gone, +200, player launched.
+- [x] Scripted test: normal fall onto an enemy → bounce, enemy survives, no points.
+- [x] Scripted test: walking into an enemy → time -10, player floats back, then flickers.
+- [x] Scripted test: jumping up into an enemy from below → hit.
+- [x] Scripted test: a respawning enemy flickers for 1 s and the player can pass through it without any contact result.
+- [x] Frame budget holds with 5 enemies: no slowdown. Measure the worst frame in raster lines (read the raster line at the start and end of the frame update, keep the maximum, show it on the HUD in a test build) and note it. The pre-phase-5 baseline was 58 lines.
+
+**Notes:**
+- New `src/enemies.p8`: 5 enemies on sprites 1-5 (states GROUNDED, RISING, FALLING plus DEAD and WARNING), shared actor physics without fast-fall, 64 px jump, speed `min(12 + (level - 1), 22)`, respawn `max(10 - (level - 1), 3)` s. The AI sits behind `ai_decide(i)`, which only sets `walk_dir`, `edge_mode` (stop, turn or walk off at platform edges) and `jump_req`; `move()` carries them out, so phase 5b can replace `ai_decide` alone. The level number is still fixed at 1 (phase 7).
+- Player: new states `LAUNCHED` (kill launch 32 px, stomp bounce 24 px; rises like a jump, no fire control, air control) and `FLOATING` (Bresenham line to the start, 4 px/f, ignores tiles, enemies and input; no treasure pickup or target highlight on the way). Plus `chain`, `invuln_timer` (100 frames, sprite hidden 4 frames of every 8) and `down_lock`.
+- Designer decisions (spec updated): down must be released after a kill before it fast-falls again; level-start enemies get the 1 s warning flicker; simple-AI rule 1 (walk to treasures) waits for pickup in phase 6.
+- Implementation choices:
+  - Contact uses the player's state from before the check for all 5 enemies, so one fast-fall can kill (or one fall bonk) two overlapping enemies in the same frame. The chain advances once per kill.
+  - A stomp first puts the player's box on top of the enemy, then bounces. Otherwise the rising player would still overlap the enemy, which counts as a hit.
+  - Simple AI: decisions only on the ground. Same row → walk toward the player, stop at edges. Player lower → walk toward the player, walk off edges. Player higher → jump if a solid tile 1-3 rows up is 1-2 columns ahead (toward the player, then the current walk direction) with a clear rise; otherwise walk to the nearer platform end and wander, turning at edges. Rule 3 (walls) runs every frame in `move()`: jump a step of 3 tiles or less if the rise is clear, else turn. The screen edge counts as a wall that is too high.
+  - Spawn spots come from a list of standing cells made at level start, rechecked when picked (a destroyed tile removes its cell). Cells that become standing later are not added (only possible under a drilled hole).
+  - Spawn picking is spread over frames: 4 tries or fallback-scan cells per frame, only on frames when no enemy makes an AI decision. A normal pick takes 1-3 tries. The worst case (20 failed tries, then the full scan) delays a respawn by well under 1 s.
+  - `score.tick()` returns at once when the time is already 0, so a hit that takes the last seconds ends the game instead of the BCD counter wrapping to 999.
+  - `load_level()` clears `video.frame_ready` at the end. The IRQ sets it during the load, so the first frame after a load used to start at a random raster line.
+- Frame budget, measured from the frame IRQ line (`main.FRAME_STATS`). The IRQ and the KERNAL keyboard scan count, so this is stricter than the 58-line baseline, which started after the IRQ. A frame that runs past the next IRQ shows as more than 312 (the jiffy clock counts the frames that passed).
+  - The first 5-enemy version measured 346 lines (dropped frames). Causes: respawn picking all in one frame (up to 200 lines), tile checks on every move, and a slow AI decision.
+  - Fixes: picking spread over frames (above). `actors.move_*` and `at_edge` skip tile checks unless the box edge enters a new tile column or row (tiles never become more solid), and check one corner when both are in the same tile. `jump_spot` and `nearest_end` work on tile-map indices. The frame IRQ sprite copy is unrolled assembly (below).
+  - Result, 30 s scripted runs with live enemies (TEST 7) and with all enemies respawning every second (TEST 8): worst 200-203 lines; 206 with every respawn forced through the fallback scan (`SPAWN_TRIES = 0`). 81 lines with enemy updates switched off. About 105 lines of headroom.
+  - The phase 2 jump-height check was rerun after the collision change: peak exactly 96 px, no frames inside a tile.
+- Frame IRQ sprite copy (designer's side task): the Prog8 loop over 8 sprites took 1046 cycles (CIA2 timer A around the handler body, calibrated). An unrolled 64tass `.for` copy (lda/sta pairs for pointer, color, x, y) takes 278 cycles, saving 768 cycles (about 12 raster lines) per frame. Scripted tests 2-6 gave the same readouts before and after; the only screenshot differences were a timer digit and the bounce phase, from the usual start-time jitter between VICE runs. KERNAL chaining (`return true`) is unchanged.
+- Verified with self-test switches, all off in the handed-over build: `main.TEST` (scenarios, readout on char row 1), `main.FRAME_STATS`, `input.SCRIPTED`, `levelgen.FORCE_FAIL` (fixed fallback layout), and a fixed RNG seed in the test builds. `enemies.frozen` stops enemy AI and movement in scenarios 2-6.
+  - TEST 1 (spawn soak): 200 generated levels with enemies placed: 0 off a standing cell, 0 closer than 8 to the start, 0 spacing violations; the closest was exactly 8.
+  - TEST 2 (kill and chain): fast-fall onto an enemy in the air → +200, enemy gone, launch 32 px. Down released, a bonk on the second enemy (no points, chain unchanged), fast-fall again → +400. Total 600. Both enemies respawned 10 s later, flickered, then went active, at least 8 tiles from the player.
+  - TEST 3 (stomp): the player keeps bouncing on a frozen enemy: 10 bonks, score 0, enemy alive.
+  - TEST 4 (walk into an enemy): hit, time -10, straight-line float to the start, then falling with the sprite flickering for 2 s.
+  - TEST 5 (jump up into an enemy from below): hit, float back through the platform above.
+  - TEST 6 (warning): the player landed inside a flickering enemy and stood in it for 14 frames: 0 hits, 0 bonks. It walked off before the enemy activated.
+  - TEST 7 and 8 also count frames with an active enemy's box inside a solid tile: 0.
+- Known: enemies can bunch up on one spot (they pass through each other), and the simple AI often wanders under a higher player. Phase 5b replaces it.
+- Workaround: prog8c 12.3.4 miscompiles `actors.x[0] > actors.x[i] + 4` (split word array, constant index); `ai_decide` copies both to locals first.
+- Code+data `$0801-$3B1B`, BSS to `$415C`. No `floats` import. 15 compiler warnings, all "always true/false" from `const bool`/`const ubyte` switches and the test-only `enemies.frozen`.
 
 ## Phase 5b: Navigation AI
 **Status:** not started

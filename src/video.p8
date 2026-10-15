@@ -225,15 +225,19 @@ video {
 
     sub frame_irq() -> bool {
         ; Runs in the IRQ: no virtual registers, nothing slow.
-        ubyte n
-        ubyte r = 0
-        for n in 0 to 7 {
-            @(SPRITE_PTRS + n) = spr_ptr[n]
-            c64.SPCOL[n] = spr_col[n]
-            c64.SPXY[r] = spr_x[n]
-            c64.SPXY[r + 1] = spr_y[n]
-            r += 2
-        }
+        ; Unrolled copy of the 8 sprites' pointer, color, x and y (lda/sta pairs, about 256 cycles).
+        %asm {{
+            .for _n := 0, _n < 8, _n += 1
+            lda  p8b_video.p8v_spr_ptr+_n
+            sta  p8b_video.p8c_SPRITE_PTRS+_n
+            lda  p8b_video.p8v_spr_col+_n
+            sta  c64.SPCOL+_n
+            lda  p8b_video.p8v_spr_x+_n
+            sta  c64.SPXY+_n*2
+            lda  p8b_video.p8v_spr_y+_n
+            sta  c64.SPXY+_n*2+1
+            .endfor
+        }}
         c64.MSIGX = spr_msb
         c64.SPENA = spr_ena
         frame_ready = true
@@ -260,6 +264,10 @@ video {
         else
             spr_msb &= ~bit
         spr_ena |= bit
+    }
+
+    sub hide_sprite(ubyte n) {
+        spr_ena &= ~(1 << n)
     }
 
 chars_bin:

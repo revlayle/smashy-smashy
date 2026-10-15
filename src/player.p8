@@ -1,4 +1,5 @@
-; Player states and movement (spec section 5). Run, jump, fall, fast-fall with tile damage, treasure pickup.
+; Player states and movement (spec section 5). Run, jump, fall, fast-fall with tile damage, treasure pickup,
+; kill launch, stomp bounce, and the float back to the start after a hit.
 
 %import actors
 %import input
@@ -9,6 +10,8 @@ player {
     const ubyte RISING = 1
     const ubyte FALLING = 2
     const ubyte FASTFALL = 3
+    const ubyte LAUNCHED = 4            ; rising after a kill or stomp: no fire control, air control
+    const ubyte FLOATING = 5            ; flying back to the start after a hit
 
     ; [TUNE] speeds in 1/16 px per frame
     const ubyte RUN_SPEED = 24
@@ -17,11 +20,24 @@ player {
     const ubyte GRAVITY = 4
     const ubyte MAX_FALL = 64
     const ubyte FASTFALL_SPEED = 96
+    const ubyte KILL_LAUNCH = 32        ; px
+    const ubyte BOUNCE = 24             ; px
+    const ubyte FLOAT_SPEED = 4         ; px per frame along the longer axis
+    const ubyte INVULN_FRAMES = 100
 
     const uword START_X = 152 + actors.BOX_INSET    ; sprite at px 152 (tile column 9.5)
     const ubyte START_Y = 0
 
-    ubyte rise_left                     ; px of jump height left
+    ubyte rise_left                     ; px of jump height (or launch) left
+    ubyte chain                         ; fast-fall kills this airborne trip (index into the kill points)
+    ubyte invuln_timer                  ; frames
+    bool down_lock                      ; after a kill, down must be released before it fast-falls again
+
+    ; float back to the start: Bresenham line, one pixel step at a time
+    ubyte float_dx
+    ubyte float_dy
+    word float_err
+    bool float_left
 
     const ubyte NO_TARGET = 255
     ubyte target_idx = NO_TARGET        ; tile map index of the highlighted fast-fall target
@@ -37,11 +53,24 @@ player {
         actors.state[0] = FALLING
         actors.facing[0] = actors.FACE_RIGHT
         target_idx = NO_TARGET
+        chain = 0
+        invuln_timer = 0
+        down_lock = false
     }
 
     sub update() {
         ubyte st = actors.state[0]
         ubyte d
+
+        if invuln_timer != 0
+            invuln_timer--
+        if st == FLOATING {
+            float_step()
+            update_target()
+            return
+        }
+        if input.held & input.DOWN == 0
+            down_lock = false
 
         ; horizontal: full air control, except fast-fall drops straight down
         if st != FASTFALL {
@@ -78,15 +107,15 @@ player {
                     actors.vy[0] = 0
                 }
             }
-            FALLING -> {
-                if input.held & input.DOWN != 0
+            FALLING, LAUNCHED -> {
+                if input.held & input.DOWN != 0 and not down_lock
                     st = FASTFALL
             }
         }
 
         ; vertical movement
         when st {
-            RISING -> {
+            RISING, LAUNCHED -> {
                 d = actors.advance(actors.y_frac[0], RISE_SPEED)
                 actors.y_frac[0] = actors.new_frac
                 if d > rise_left
@@ -113,6 +142,8 @@ player {
                         st = GROUNDED
                         actors.vy[0] = 0
                         actors.y_frac[0] = 0
+                        chain = 0
+                        down_lock = false
                     }
                 }
             }
@@ -130,7 +161,7 @@ player {
         ubyte new_idx = NO_TARGET
         ubyte col
         ubyte row
-        if actors.state[0] != GROUNDED {
+        if actors.state[0] != GROUNDED and actors.state[0] != FLOATING {
             ubyte left = lsb(actors.x[0] >> 4)
             ubyte right = lsb((actors.x[0] + actors.BOX_W - 1) >> 4)
             col = lsb((actors.x[0] + actors.BOX_W / 2) >> 4)
@@ -197,14 +228,77 @@ player {
         }
     }
 
+    sub launch(ubyte height) {
+        actors.state[0] = LAUNCHED
+        rise_left = height
+        actors.vy[0] = 0
+        actors.y_frac[0] = 0
+    }
+
+    sub launch_from_kill() {
+        launch(KILL_LAUNCH)
+        down_lock = true
+    }
+
+    sub bounce(ubyte enemy_y) {
+        ; Stomp: put the box on top of the enemy, then bounce.
+        void actors.move_up(0, actors.y[0] + actors.BOX_H - enemy_y)
+        launch(BOUNCE)
+    }
+
+    sub hit() {
+        ; Lose time, then float in a straight line to the start point (ignoring tiles, enemies and input).
+        score.lose_time(score.HIT_PENALTY)
+        actors.state[0] = FLOATING
+        actors.vy[0] = 0
+        actors.x_frac[0] = 0
+        actors.y_frac[0] = 0
+        float_left = actors.x[0] > START_X
+        if float_left
+            float_dx = lsb(actors.x[0] - START_X)
+        else
+            float_dx = lsb(START_X - actors.x[0])
+        float_dy = actors.y[0] - START_Y        ; the start is at the top, so the float goes up
+        float_err = (float_dx as word) - (float_dy as word)
+    }
+
+    sub float_step() {
+        ; FLOAT_SPEED single-pixel steps along the line; each moves the longer axis by 1 px.
+        word e2
+        repeat FLOAT_SPEED {
+            if actors.x[0] == START_X and actors.y[0] == START_Y {
+                actors.state[0] = FALLING
+                invuln_timer = INVULN_FRAMES
+                return
+            }
+            e2 = float_err << 1
+            if e2 > -(float_dy as word) {
+                float_err -= float_dy as word
+                if float_left
+                    actors.x[0]--
+                else
+                    actors.x[0]++
+            }
+            if e2 < (float_dx as word) {
+                float_err += float_dx as word
+                actors.y[0]--
+            }
+        }
+    }
+
     sub draw() {
+        if invuln_timer & 4 != 0 {
+            video.hide_sprite(0)
+            return
+        }
         ubyte frame
         bool left = actors.facing[0] == actors.FACE_LEFT
         when actors.state[0] {
             GROUNDED -> frame = if left assets.SPR_PLAYER_RUN_L_0 else assets.SPR_PLAYER_RUN_R_0
-            RISING -> frame = if left assets.SPR_PLAYER_JUMP_L_0 else assets.SPR_PLAYER_JUMP_R_0
+            RISING, LAUNCHED -> frame = if left assets.SPR_PLAYER_JUMP_L_0 else assets.SPR_PLAYER_JUMP_R_0
             FALLING -> frame = if left assets.SPR_PLAYER_FALL_L_0 else assets.SPR_PLAYER_FALL_R_0
-            else -> frame = assets.SPR_PLAYER_FASTFALL_0
+            FASTFALL -> frame = assets.SPR_PLAYER_FASTFALL_0
+            else -> frame = assets.SPR_PLAYER_FLOAT_0
         }
         video.set_sprite(0, frame, video.PLAYER_COLOR, actors.x[0] - actors.BOX_INSET, actors.y[0])
     }

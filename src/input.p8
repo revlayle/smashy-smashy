@@ -16,10 +16,12 @@ input {
     ubyte prev
 
     ; (frames to hold, joystick bits) pairs. A 0 frame count ends the script; input is released after that.
-    ubyte[] script = [
+    ; Self-tests may point `script` at their own table.
+    ubyte[] default_script = [
         100, 0,
         0, 0
     ]
+    uword script = &default_script
     ubyte script_pos = 0
     ubyte script_left = 0
 
@@ -36,12 +38,12 @@ input {
 
     sub scripted() -> ubyte {
         while script_left == 0 {
-            if script[script_pos] == 0
+            if @(script + script_pos) == 0
                 return 0
-            script_left = script[script_pos]
+            script_left = @(script + script_pos)
             script_pos += 2
         }
         script_left--
-        return script[script_pos - 1]
+        return @(script + script_pos - 1)
     }
 }

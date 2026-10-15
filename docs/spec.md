@@ -114,7 +114,7 @@ Max speed stays under 16 px/f, so collision never tunnels through a tile.
 ### Rules
 - **Jump:** fire is edge-triggered (it must be released between jumps). While `RISING` and fire is held, rise at constant speed until `rise_left` hits 0. Release or apex → `FALLING` (vy = 0, gravity applies). Hitting a solid tile with the head → `FALLING`.
 - **Fall off an edge:** `GROUNDED` with no solid tile under the box → `FALLING`.
-- **Fast-fall:** joystick down held while `RISING`, `FALLING` or `LAUNCHED` → `FASTFALL`, vy = 96. Holding down from before a jump or a walk off an edge counts. Fire is ignored once descending. A fast-fall can't be cancelled: it ends only by landing on an intact platform or the floor (then normal ground control returns) or by killing an enemy (→ `LAUNCHED`, with air control).
+- **Fast-fall:** joystick down held while `RISING`, `FALLING` or `LAUNCHED` → `FASTFALL`, vy = 96. Holding down from before a jump or a walk off an edge counts. Fire is ignored once descending. A fast-fall can't be cancelled: it ends only by landing on an intact platform or the floor (then normal ground control returns) or by killing an enemy (→ `LAUNCHED`, with air control). After a kill, down must be released before it can start another fast-fall, so holding down through a kill gives the full launch; pressing down again during the launch (or the fall after it) fast-falls at once.
 - **Air control:** full left/right control in the air at run speed while rising, falling or launched. **Fast-fall drops straight down:** no horizontal movement until it ends. Aiming is done before pressing down.
 - **Landing in `FASTFALL`:** damage the tile under the box's centre (1 → 2). If it is already damaged (2 → 0, destroyed), the player keeps fast-falling through the hole. The first hit on an intact tile is a normal landing (fast-fall ends). When the tile is destroyed, the box snaps sideways to the centre of the hole (2 px clear each side) so the fall always continues through it, even if the box was straddling two tiles.
 - **Target highlight:** while in the air (any state but `GROUNDED`), the tile a fast-fall from the current position would damage is drawn in `TARGET_COLOR` (white). It is found by dropping the box straight down: the landing row is the first row with a solid tile under either box edge, and the target is the tile under the box centre in that row. Nothing is highlighted when that tile is the floor or empty (the drop would land on an edge, no damage). The highlight follows the player and moves down as tiles are drilled.
@@ -145,7 +145,7 @@ Bonks are unlimited: an enemy can be bonked again as soon as the player comes ba
 
 ### Simple AI (phase 5a; replaced by the navigation AI in phase 5b)
 Decisions at most every 8 frames per enemy, staggered so at most one enemy decides per frame. **[TUNE]**
-1. Not carrying, and a treasure on the same tile row within 5 tiles with nothing solid in between → walk to it.
+1. Not carrying, and a treasure on the same tile row within 5 tiles with nothing solid in between → walk to it. *(Not built in 5a: without pickup, enemies would just stand on treasures. Designer decision: it waits for pickup in phase 6, or is replaced by the hunter role in 5b.)*
 2. Else chase the player:
    - Player on the same row → walk toward the player.
    - Player lower → walk toward the player and deliberately walk off edges.
@@ -155,6 +155,8 @@ Decisions at most every 8 frames per enemy, staggered so at most one enemy decid
 ### Navigation AI (phase 5b)
 
 **Frame budget (measured before phase 5):** the worst frame of the current game (player, tile redraws, HUD) uses 58 of 312 raster lines. Enemy movement reuses the player physics, about 10-20 lines per enemy. AI decisions must stay table lookups; anything heavier is time-sliced across frames.
+
+**Measured after phase 5a** (from the frame IRQ line, so the IRQ and KERNAL keyboard scan count; 312 lines per frame): worst frame about 200-206 lines with 5 live enemies and respawns; 81 lines with enemy updates switched off. One enemy decision costs up to about 35 lines, one enemy move about 10-15.
 
 **Platform map.** Built after level generation, kept in program RAM (BSS):
 - A **platform** is a maximal horizontal run of standing cells (empty cell above solid/damaged/floor) on one row. Max 32 platforms; extras are ignored (treated as unreachable). `platform_of[240]` maps each cell to its platform (255 = none).
@@ -194,8 +196,8 @@ Decisions at most every 8 frames per enemy, staggered so at most one enemy decid
 
 ### Respawn
 - Destroyed enemy → `respawn_timer = max(10 - (level - 1), 3)` seconds. **[TUNE]**
-- Respawn location: a random empty tile standing on a solid tile, at least 8 tiles (Manhattan) from the player. Up to 20 tries, then the farthest valid candidate.
-- **Warning flicker:** a respawning enemy appears at its spot and flickers for 1 s before it becomes active. While flickering it doesn't move and has no contact with the player at all (no hit, bonk or kill).
+- Respawn location: a random empty tile standing on a solid tile, at least 8 tiles (Manhattan) from the player. Up to 20 tries, then the farthest valid candidate. The tries and the fallback scan are spread over frames (a few per frame, only on frames without an AI decision), so a respawn can land a few frames late.
+- **Warning flicker:** a respawning enemy appears at its spot and flickers for 1 s before it becomes active. While flickering it doesn't move and has no contact with the player at all (no hit, bonk or kill). Enemies placed at level start get the same 1 s flicker.
 
 ## 7. Level generation
 
@@ -219,7 +221,7 @@ Grid is 20 x 12. Row 11 = floor. The spawn zone (columns 8-11, rows 0-1) is kept
 - Optional later: 1-2 treasures enclosed by platforms, reachable only by drilling ("drill pockets"), as hinted in the design.
 
 ### Enemies at level start
-5 enemies on random standing cells ≥ 8 tiles from the player start, at least 3 tiles apart.
+5 enemies on random standing cells ≥ 8 tiles from the player start, at least 3 tiles apart (`|dcol| >= 3` or `|drow| >= 3`, as for treasures). Same picking rule as a respawn (20 random tries, then the farthest valid cell). They start with the 1 s warning flicker (§6).
 
 ### RNG
 `math.rnd()`, masked and retried for ranges (`levelgen.rand_below`; `math.randrange()` does a 16-bit multiply and is several times slower). Seeded once with `math.rndseed()` from the CIA1 timer and raster line at the moment fire is pressed on the title screen. Until the title screen exists (phase 7), it is seeded at startup.
@@ -344,6 +346,7 @@ None at the moment.
 - Timer runs during the post-hit float; the float is fast (4 px/f, < 1 s worst case).
 - Unlimited bonks on the same enemy (1 s stun is the noted alternate). Jumping up into an enemy is a hit.
 - Respawning enemies flicker harmlessly for 1 s before activating.
+- Phase 5a decisions: down must be released after a kill before it fast-falls again; level-start enemies flicker like respawns; simple-AI rule 1 (walk to treasures) waits for pickup in phase 6.
 - 3 s pickup cooldown for an enemy that just lost a treasure.
 - Pause on Run/Stop. Session high score in RAM.
 - Bonks chain: a bonk's bounce can land on another enemy for another bonk. Bonks score nothing and leave the fast-fall kill chain unchanged: they neither advance it nor reset it (only landing on a tile resets it).

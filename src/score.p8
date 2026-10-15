@@ -8,6 +8,7 @@ score {
     const uword LEVEL_TIME_BONUS = $0060    ; BCD seconds added on level completion
     const ubyte TREASURES_PER_LEVEL = 10
     const ubyte FRAMES_PER_SECOND = 50
+    const uword HIT_PENALTY = $0010         ; BCD seconds
 
     const uword MAX_POINTS = $9999          ; BCD hundreds, shown as 999900
 
@@ -51,8 +52,19 @@ score {
         video.hud_time(time)
     }
 
+    sub lose_time(uword bcd_seconds) {
+        ; Clamps at 0.
+        if time < bcd_seconds
+            time = 0
+        else
+            time = bcd.subuw(time, bcd_seconds)
+        video.hud_time(time)
+    }
+
     sub tick() -> bool {
         ; Count down one frame. Returns true when the time has run out.
+        if time == 0
+            return true                     ; a hit took the last seconds
         time_frames--
         if time_frames == 0 {
             time_frames = FRAMES_PER_SECOND
