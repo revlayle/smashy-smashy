@@ -231,7 +231,7 @@ Grid is 20 x 12. Row 11 = floor. The spawn zone (columns 8-11, rows 0-1) is kept
 `math.rnd()`, masked and retried for ranges (`levelgen.rand_below`; `math.randrange()` does a 16-bit multiply and is several times slower). Seeded once with `math.rndseed()` from the CIA1 timer and raster line at the moment fire is pressed on the title screen. Until the title screen exists (phase 7), it is seeded at startup.
 
 ### Time
-A level start can take 2-3 seconds (designer decision, phase 5b: a READY delay or a wait for the player will cover it in phase 7); it must not take much longer. Measured on 200 levels with the 80 px enemy jump: 0 fallbacks, at most 6 attempts, slowest 22 frames. Worst case (30 failed attempts, then the fallback) 119 frames (2.4 s).
+A level start can take 2-3 seconds (designer decision, phase 5b); the 3 s "READY?" pause (§9) covers it. It must not take much longer. Measured on 200 levels with the 80 px enemy jump: 0 fallbacks, at most 6 attempts, slowest 22 frames. Worst case (30 failed attempts, then the fallback) 119 frames (2.4 s).
 
 ## 8. Scoring and timer
 
@@ -241,19 +241,23 @@ A level start can take 2-3 seconds (designer decision, phase 5b: a READY delay o
   - Fast-fall kill = 2, 4, 8, 16, 32 hundred by chain (`$02`, `$04`, `$08`, `$16`, `$32`) → 200 to 3200 in one airborne trip. The chain resets on landing.
   - No-kill bonus: 25 hundred (`$25`, 2500 points) when a level is completed with 0 enemies destroyed.
 - Timer: seconds plus a 50-frame subcounter. Starts at 60. +60 on level completion (carried over). -10 per hit, clamped at 0. 0 → game over. Shown as 3 digits.
-- Timer paused during: level-complete dissolve and float, new-level draw.
+- Timer paused during: level-complete dissolve and float, the READY? pause (including generation and drawing).
 
 ## 9. Game flow
 
 ```
-TITLE --fire--> NEW_GAME --> LEVEL_START --> PLAYING
-PLAYING --10 treasures--> LEVEL_COMPLETE --> LEVEL_START (level+1, +60 s)
+TITLE --fire--> NEW_GAME --> LEVEL_START (READY?) --> PLAYING
+PLAYING --10 treasures--> LEVEL_COMPLETE --> LEVEL_START (READY?, level+1, +60 s)
 PLAYING --time 0--> GAME_OVER --fire--> TITLE
 ```
 - **TITLE**: minimal "press fire" screen, needed to seed the RNG and to restart. Shows the session high score.
 - **Pause**: Run/Stop toggles pause during PLAYING (edge-triggered, press again to resume). Everything freezes, including the timer; "PAUSED" is shown. Ignored during transitions.
-- **LEVEL_START**: generate, draw the level, place enemies, player at start in `FALLING`.
-- **LEVEL_COMPLETE**: enemies vanish. Non-floor tiles are erased in random order, ~8 tiles per frame (about 1 s). The player floats to the start. The next level is generated during the float.
+- **LEVEL_COMPLETE**: enemies vanish. Non-floor tiles are erased in random order, ~8 tiles per frame (about 1 s). The player floats to the start.
+- **LEVEL_START** ("READY?" pause), used for every level including the first:
+  1. "READY?" appears, hi-res text centred on the playfield. The player sprite stays at the start point (floating pose), with no control. Timer paused.
+  2. Generate the next level. Blocking is fine here: nothing animates except the frame IRQ. Then draw it, so the player can see the new layout during the rest of the pause. Place enemies (not yet active).
+  3. The pause lasts 3 s from when READY? appeared, or until generation and drawing finish if that takes longer (worst case measured 2.4 s, so normally exactly 3 s). **[TUNE]**
+  4. Remove the text. The player switches to `FALLING`, enemies start their 1 s warning flicker, the timer runs: PLAYING.
 - **GAME_OVER**: show the final score and level reached; fire → TITLE.
 - **Session high score**: the best score since the program started, kept in RAM (lost on power-off). Updated at game over, shown on the title and game-over screens. A saved high-score list is backlog (see §14).
 
