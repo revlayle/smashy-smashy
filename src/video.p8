@@ -195,9 +195,9 @@ video {
         hud_text(29, sc:"level")
     }
 
-    sub hud_score(long bcd) {
-        hud_digits(HUD_SCORE_COL, msw(bcd) as uword, 2)
-        hud_digits(HUD_SCORE_COL + 2, lsw(bcd) as uword, 4)
+    sub hud_score(uword bcd_hundreds) {
+        hud_digits(HUD_SCORE_COL, bcd_hundreds, 4)
+        hud_digits(HUD_SCORE_COL + 4, 0, 2)
     }
 
     sub hud_time(uword bcd) {

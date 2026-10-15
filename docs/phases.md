@@ -127,6 +127,7 @@ Done when:
 - Keyboard play in VICE: `tools/vicerc` maps the arrow keys and left Ctrl to joystick port 2 (keyset 1). `build run` loads it with `-config` and injects the PRG (`-autostartprgmode 1`). The game still reads only the joystick.
 - Tile changes are drawn immediately with `draw_tile` rather than queued (at most 2 per frame).
 - The timer starts with the frame loop and counts the first second after 50 frames.
+- Score format changed after the phase was approved (one-off change): the score is now a BCD `uword` in hundreds (`bcd.adduw`, no `long`), shown with a fixed "00" and clamped at 999900. The treasure table is `$01`-`$15`. The notes above describe the original `long` version. Re-verified by script: treasure 6 → 000700; start 009300 + a 1500 treasure → 010800; start 999500 + a 1500 treasure → 999900 (clamped). Code+data is now `$0801-$1F8D`.
 - Code+data `$0801-$1FEC`, BSS just after. No `floats` import. The compiler warnings are the 5 expected `const bool` ones.
 
 ## Phase 4: Level generator

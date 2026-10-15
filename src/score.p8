@@ -9,14 +9,16 @@ score {
     const ubyte TREASURES_PER_LEVEL = 10
     const ubyte FRAMES_PER_SECOND = 50
 
-    long points                             ; BCD, 6 digits
+    const uword MAX_POINTS = $9999          ; BCD hundreds, shown as 999900
+
+    uword points                            ; BCD, in units of 100 points (4 digits, shown with a fixed "00")
     uword time                              ; BCD seconds, 3 digits
     ubyte time_frames                       ; frames left in the current second
     ubyte treasures_left
 
-    ; treasure type t is worth (t + 1) * 100 points, as BCD
-    uword[15] treasure_points = [$0100, $0200, $0300, $0400, $0500, $0600, $0700, $0800,
-                                 $0900, $1000, $1100, $1200, $1300, $1400, $1500]
+    ; treasure type t is worth t + 1 hundred points, as BCD
+    ubyte[15] treasure_points = [$01, $02, $03, $04, $05, $06, $07, $08,
+                                 $09, $10, $11, $12, $13, $14, $15]
 
     sub new_game() {
         points = 0
@@ -35,8 +37,12 @@ score {
         treasures_left--
     }
 
-    sub add_points(uword bcd_points) {
-        points = bcd.addl(points, bcd_points as long)
+    sub add_points(ubyte bcd_hundreds) {
+        ; Clamps at MAX_POINTS. The largest add is far below $9999, so a wrap always ends below the old value.
+        uword new_points = bcd.adduw(points, bcd_hundreds)
+        if new_points < points
+            new_points = MAX_POINTS
+        points = new_points
         video.hud_score(points)
     }
 

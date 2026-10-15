@@ -15,7 +15,7 @@ Items marked **[DECIDE]** are proposals waiting for the designer's confirmation.
 
 ### Number rules
 - **No floating point anywhere.** Do not `%import floats`. Besides being very slow, using floats keeps the BASIC ROM banked in and costs 8 KB of program RAM.
-- Prefer `ubyte`/`byte`. Use `uword` only where a value can exceed 255, such as the player's x pixel (0-319). Use `long` only for the BCD score.
+- Prefer `ubyte`/`byte`. Use `uword` only where a value can exceed 255, such as the player's x pixel (0-319). No `long`: the score is a BCD `uword` in hundreds (§8).
 - Multiply and divide only by powers of two (shifts), or use lookup tables. No general `*` or `/` in per-frame code.
 - **Speeds are signed bytes in 1/16-pixel steps** ("subpixels"): 24 means 1.5 px per frame. Each actor stores its position as a whole-pixel coordinate plus a `ubyte` fraction (0-15). Each frame: `frac += speed`, carry `frac >> 4` into the pixel coordinate, keep `frac & 15`. Tile lookups then use the pixel coordinate directly, with no 16-bit shifting of a combined value.
 
@@ -131,7 +131,7 @@ Max speed stays under 16 px/f, so collision never tunnels through a tile.
 ## 6. Enemies
 
 ### Contact with the player (checked in this order)
-1. Player in `FASTFALL`, player's bottom edge in the top half of the enemy box → **kill**: enemy destroyed, any carried treasure dropped, score `200 << chain`, `chain += 1` (max 4), player → `LAUNCHED` 32 px.
+1. Player in `FASTFALL`, player's bottom edge in the top half of the enemy box → **kill**: enemy destroyed, any carried treasure dropped, score 2, 4, 8, 16, 32 hundred by chain (§8), `chain += 1` (max 4), player → `LAUNCHED` 32 px.
 2. Player falling (vy > 0, not fast-fall) with the same geometry → **stomp**: carried treasure dropped, player bounces 24 px. Enemy survives. No score.
 3. Otherwise → player is hit (unless invulnerable or floating).
 
@@ -183,10 +183,11 @@ Grid is 20 x 12. Row 11 = floor. The spawn zone (columns 8-11, rows 0-1) is kept
 
 ## 8. Scoring and timer
 
-- Score: 6 decimal digits stored as BCD in a `long` and updated with `bcd.addl()`. The HUD prints each nibble as a digit, so no division is needed.
-- Treasure type `t` = `(t + 1) * 100` points (100-1500).
-- Fast-fall kill = `200 << chain` → 200, 400, 800, 1600, 3200 in one airborne trip. The chain resets on landing.
-- No-kill bonus: 2500 when a level is completed with 0 enemies destroyed.
+- Score: stored in units of 100 points as a 4-digit BCD `uword` and updated with `bcd.adduw()`. The HUD prints each nibble as a digit and appends a fixed "00", so it shows 6 digits and no division is needed. Max 9999 (999,900 shown); adding past it clamps at the max instead of rolling over.
+- Point values are BCD hundreds (`ubyte`):
+  - Treasure type `t` = `t + 1` hundred (100-1500), table `$01`-`$15`.
+  - Fast-fall kill = 2, 4, 8, 16, 32 hundred by chain (`$02`, `$04`, `$08`, `$16`, `$32`) → 200 to 3200 in one airborne trip. The chain resets on landing.
+  - No-kill bonus: 25 hundred (`$25`, 2500 points) when a level is completed with 0 enemies destroyed.
 - Timer: seconds plus a 50-frame subcounter. Starts at 60. +60 on level completion (carried over). -10 per hit, clamped at 0. 0 → game over. Shown as 3 digits.
 - Timer paused during: level-complete dissolve and float, new-level draw.
 
