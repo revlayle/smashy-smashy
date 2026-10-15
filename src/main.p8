@@ -1,9 +1,10 @@
-; C64 platformer. Phase 5a: generated levels with tile damage, treasures, score, timer and enemies (simple AI).
+; C64 platformer. Phase 5b: generated levels with tile damage, treasures, score, timer and enemies (navigation AI).
 
 %import video
 %import input
 %import player
 %import enemies
+%import nav
 %import score
 %import levelgen
 %zeropage basicsafe
@@ -31,9 +32,18 @@ main {
     ; clock (ticked by the frame IRQ) counts the whole frames that passed.
     const bool FRAME_STATS = false
     ; Self-test scenario (0 = off). Sets up enemies and the input script after each level load and shows a
-    ; readout on char row 1 (see test_setup and test_hud). Needs input.SCRIPTED; 2-6 need levelgen.FORCE_FAIL,
-    ; 7-8 (frame budget) need FRAME_STATS.
+    ; readout on char row 1 (see test_setup and test_hud). Needs input.SCRIPTED; 2-6 and 10-11 need
+    ; levelgen.FORCE_FAIL, 7-8 (frame budget) need FRAME_STATS. 9 (link replay) needs neither.
     const ubyte TEST = 0
+    const ubyte LINK_LEVELS = 20        ; TEST 9: levels to check
+    const ubyte LINK_HOLES = 0          ; TEST 9: random platform tiles destroyed in each level before the check
+    const bool LINK_MAX_SPEED = false   ; TEST 9: enemies at the level-11 speed cap instead of level 1
+    const bool STEP_COMB = false        ; TEST 13: time the rebuild on a worst-case layout with many platforms
+
+    ; Debug view: HUD row shows, per enemy, its platform and its target platform at the last decision
+    ; (hex, "ff" = none) and its plan (0 stand, 1 walk to a spot, 2 wander, 3 walk off, 4 jump), then the
+    ; number of finished map rebuilds.
+    const bool NAV_DEBUG = false
 
     sub start() {
         video.init()
@@ -59,12 +69,15 @@ main {
             enemies.draw()
             if DEBUG_HUD
                 debug_hud()
+            if NAV_DEBUG
+                nav_debug()
             if REGEN_KEY and cbm.GETIN2() == KEY_F1
                 load_level()
             if score.treasures_left == 0
                 level_complete()
             else if score.tick()
                 game_over()
+            nav.idle_build()            ; last: map rebuild slices only use the time left in the frame
             if FRAME_STATS
                 frame_stats()
             if TEST != 0
@@ -111,6 +124,7 @@ main {
         score.new_level()
         player.init()
         player.draw()
+        nav.new_level()
         enemies.new_level(1)
         enemies.place_all()
         enemies.draw()
@@ -250,12 +264,42 @@ main {
         30, input.FIRE | input.RIGHT, 10, input.DOWN, 120, input.RIGHT, 30, input.FIRE, 10, input.DOWN,
         120, input.LEFT, 30, input.FIRE, 10, input.DOWN, 120, input.RIGHT, 0, 0
     ]
+    ubyte[] script_drill_stress = [
+        30, 0,
+        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
+        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
+        40, input.LEFT,
+        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
+        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
+        30, input.FIRE | input.LEFT, 30, input.LEFT,
+        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
+        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
+        30, input.FIRE | input.RIGHT, 120, input.RIGHT,
+        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
+        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
+        30, input.FIRE | input.RIGHT, 60, input.RIGHT,
+        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
+        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
+        120, input.LEFT, 30, input.FIRE | input.LEFT, 100, input.LEFT, 0, 0
+    ]
     ubyte warn_overlap                  ; frames the player's box overlapped an enemy in WARNING
     ubyte enemy_inside
 
     sub test_setup() {
         if TEST == 1 {
             spawn_soak()
+            return
+        }
+        if TEST == 9 {
+            link_soak()
+            return
+        }
+        if TEST == 13 {
+            step_timing()
+            return
+        }
+        if TEST == 14 {
+            climb_soak()
             return
         }
         ubyte idx
@@ -321,8 +365,342 @@ main {
                 }
                 input.script = &script_stress
             }
+            12 -> {
+                ; frame budget with map rebuilds: live enemies, the player drills down in several columns
+                ; (kept invulnerable, so hits don't end the run)
+                enemies.place_all()
+                enemies.frozen = false
+                input.script = &script_drill_stress
+            }
+            10 -> {
+                ; chaser route: the player climbs to the upper right platform (row 1, columns 13-18) and waits.
+                ; Enemy 1 (chaser) starts on the floor at column 2 after a 3 s warning.
+                test_put(1, 2 * 16 + 2, 160, enemies.WARNING)
+                enemies.timer_frames[1] = 150
+                enemies.frozen = false
+                nav.no_mistakes = true
+                track = 1
+                input.script = &script_climb
+            }
+            11 -> {
+                ; route cut: a treasure on the row-4 platform at column 14. Enemy 4 (hunter) starts on the floor
+                ; at column 18; its route goes up the left side through the take-off cell (3, 7). The player
+                ; walks off the left end of the row-4 platform and drills tile (3, 8) away with two fast-falls,
+                ; which cuts that route; the right side (columns 15-19, take-offs 14 and 16) remains.
+                video.tiles[video.row_start[4] + 14] = video.T_TREASURE
+                video.draw_tile(14, 4)
+                nav.new_level()
+                test_put(4, 18 * 16 + 2, 160, enemies.GROUNDED)
+                enemies.frozen = false
+                nav.no_mistakes = true
+                track = 4
+                input.script = &script_drill
+            }
         }
         enemies.draw()
+    }
+
+    ; ---- TEST 9: replay every link of the platform map with the enemy physics ----
+    sub link_soak() {
+        ; For LINK_LEVELS levels, put enemy 1 at the far end of its platform from each link's take-off column,
+        ; let nav carry the link out, and check that it lands on the link's target platform.
+        ; Char row 1, hex: n=levels, l=links tested (4 digits), f=failures, t=timeouts (no landing in 600 frames),
+        ; i=frames with the box inside a solid tile, k=frames for the slowest link.
+        ; Row 2: first failure: level, from platform, link kind, take-off column, expected, landed on.
+        ubyte n = 0
+        uword tested = 0
+        ubyte fails = 0
+        ubyte timeouts = 0
+        ubyte inside = 0
+        uword slowest = 0
+        if LINK_MAX_SPEED
+            enemies.speed = enemies.MAX_SPEED
+        ubyte i
+        for i in enemies.FIRST to enemies.LAST {
+            actors.state[i] = enemies.DEAD
+            video.hide_sprite(i)
+        }
+        repeat LINK_LEVELS {
+            if n != 0
+                levelgen.generate(1)
+            n++
+            repeat LINK_HOLES {
+                ; destroy a random platform tile (rows 1-9)
+                repeat {
+                    ubyte idx = levelgen.rand_below(levelgen.CELLS)
+                    if idx >= video.MAP_W and video.tiles[idx] == video.T_SOLID {
+                        video.tiles[idx] = video.T_EMPTY
+                        break
+                    }
+                }
+            }
+            nav.new_level()
+            ubyte p
+            for p in 0 to nav.f_count - 1 {
+                ubyte s = nav.plat_start[nav.fp + p]
+                ubyte e = nav.plat_end[nav.fp + p]
+                ubyte row = nav.plat_row[nav.fp + p]
+                ubyte l = nav.plat_link[nav.fp + p]
+                repeat nav.plat_nlinks[nav.fp + p] {
+                    ubyte c = s
+                    if nav.link_col[l] < (s + e) >> 1
+                        c = e
+                    test_put(1, ((c as uword) << 4) + 2, row << 4, enemies.GROUNDED)
+                    actors.x_frac[1] = 0
+                    actors.y_frac[1] = 0
+                    enemies.walk_dir[1] = enemies.DIR_NONE
+                    nav.take_link(1, l)
+                    uword frames = 0
+                    while nav.plan[1] != nav.PLAN_STAND and frames != 600 {
+                        nav.steer(1)
+                        enemies.move(1)
+                        frames++
+                        if box_inside(1)
+                            inside++
+                    }
+                    if frames > slowest
+                        slowest = frames
+                    ubyte got = nav.platform_under(actors.x[1], actors.y[1], true)
+                    if frames == 600
+                        timeouts++
+                    if got != nav.link_to[l] {
+                        if fails == 0 {
+                            ff[0] = n
+                            ff[1] = p
+                            ff[2] = nav.link_kind[l]
+                            ff[3] = nav.link_col[l]
+                            ff[4] = nav.link_to[l]
+                            ff[5] = got
+                        }
+                        fails++
+                    }
+                    tested++
+                    l++
+                }
+            }
+        }
+        actors.state[1] = enemies.DEAD
+        video.draw_level()
+        enemies.draw()
+        video.hide_sprite(0)
+        sys.memset(video.COLOR_RAM + 40, 80, video.COLOR_HUD)
+        sys.memset(video.SCREEN + 40, 80, video.CHAR_SPACE)
+        test_text(0, sc:"n")
+        test_hex(1, n)
+        test_text(4, sc:"l")
+        test_hex(5, msb(tested))
+        test_hex(7, lsb(tested))
+        test_text(10, sc:"f")
+        test_hex(11, fails)
+        test_text(14, sc:"t")
+        test_hex(15, timeouts)
+        test_text(18, sc:"i")
+        test_hex(19, inside)
+        test_text(22, sc:"k")
+        test_hex(23, msb(slowest))
+        test_hex(25, lsb(slowest))
+        for i in 0 to 5
+            test_hex(40 + i * 3, ff[i])
+        repeat {
+        }
+    }
+    ubyte[6] ff                         ; TEST 9: first failure
+
+    sub step_timing() {
+        ; TEST 13: rebuild the map 20 times, one step per frame, and show the most raster lines one step of
+        ; each stage took (rows, links, routes) and the platform count on char row 1.
+        uword[4] worst = [0, 0, 0, 0]
+        video.hide_sprite(0)
+        if STEP_COMB {
+            ; worst case: every other tile in rows 2, 3, 5, 6 and 8 (1-wide platforms, many links)
+            sys.memset(&video.tiles, levelgen.CELLS, video.T_EMPTY)
+            ubyte c
+            for c in 0 to video.MAP_W - 1 step 2 {
+                video.tiles[video.row_start[2] + c] = video.T_SOLID
+                video.tiles[video.row_start[3] + c + 1] = video.T_SOLID
+                video.tiles[video.row_start[5] + c] = video.T_SOLID
+                video.tiles[video.row_start[6] + c + 1] = video.T_SOLID
+                video.tiles[video.row_start[8] + c] = video.T_SOLID
+            }
+            video.draw_level()
+        }
+        repeat 20 {
+            nav.tile_destroyed()
+            while nav.stage != nav.ST_IDLE {
+                ubyte st = nav.stage
+                video.wait_frame()
+                uword t0 = raster_line()
+                void nav.build_step()
+                uword t1 = raster_line()
+                if t1 < t0
+                    t1 += 312
+                if t1 - t0 > worst[st]
+                    worst[st] = t1 - t0
+            }
+        }
+        sys.memset(video.COLOR_RAM + 40, 40, video.COLOR_HUD)
+        ubyte k
+        for k in 1 to 3 {
+            test_hex(k * 6, msb(worst[k]))
+            test_hex(k * 6 + 2, lsb(worst[k]))
+        }
+        test_hex(30, nav.f_count)
+        repeat {
+        }
+    }
+
+    uword cells_ok
+    uword cells_all
+
+    sub climb_soak() {
+        ; TEST 14: over SOAK_COUNT generated levels, how far enemies can climb from the floor by the
+        ; platform map's links. Char row 1, hex: n=levels, a=levels where the floor reaches every platform
+        ; (row-0 platforms not counted), t=levels where it reaches the top band (standing row 3 or higher),
+        ; s=levels where it reaches the player's start landing platform, m=band 2 (standing rows 4-6).
+        ubyte n = 0
+        ubyte all = 0
+        ubyte top = 0
+        ubyte start = 0
+        ubyte mid = 0
+        repeat SOAK_COUNT {
+            levelgen.generate(1)
+            nav.new_level()
+            n++
+            ubyte fl = nav.f_count - 1  ; the floor row is scanned last
+            bool got_all = true
+            bool got_top = false
+            bool got_mid = false
+            ubyte p
+            for p in 0 to nav.f_count - 1 {
+                ubyte r = nav.plat_row[nav.fp + p]
+                if nav.hops(fl, p) == nav.NONE {
+                    if r != 0
+                        got_all = false
+                } else {
+                    if r <= 3
+                        got_top = true
+                    else if r <= 6
+                        got_mid = true
+                }
+            }
+            if got_all
+                all++
+            if got_top
+                top++
+            if got_mid
+                mid++
+            ; standing cells (of mapped platforms) that enemies on the floor can reach
+            ubyte idx
+            for idx in 0 to levelgen.CELLS - 1 {
+                ubyte q = nav.platform_at(idx)
+                if q != nav.NONE {
+                    cells_all++
+                    if nav.hops(fl, q) != nav.NONE
+                        cells_ok++
+                }
+            }
+            ubyte sp = nav.platform_under(player.START_X, 0, false)
+            if sp != nav.NONE and nav.hops(fl, sp) != nav.NONE
+                start++
+        }
+        video.draw_level()
+        sys.memset(video.COLOR_RAM + 40, 40, video.COLOR_HUD)
+        test_text(0, sc:"n")
+        test_hex(1, n)
+        test_text(4, sc:"a")
+        test_hex(5, all)
+        test_text(8, sc:"t")
+        test_hex(9, top)
+        test_text(12, sc:"s")
+        test_hex(13, start)
+        test_text(16, sc:"m")
+        test_hex(17, mid)
+        test_text(20, sc:"c")
+        test_hex(21, msb(cells_ok))
+        test_hex(23, lsb(cells_ok))
+        test_hex(26, msb(cells_all))
+        test_hex(28, lsb(cells_all))
+        repeat {
+        }
+    }
+
+    sub box_inside(ubyte i) -> bool {
+        uword bx = actors.x[i]
+        ubyte by = actors.y[i]
+        return actors.solid_at(bx, by) or actors.solid_at(bx + actors.BOX_W - 1, by)
+                or actors.solid_at(bx, by + actors.BOX_H - 1) or actors.solid_at(bx + actors.BOX_W - 1, by + actors.BOX_H - 1)
+    }
+
+    ; ---- TEST 10-11 readout: route history of enemy `track` ----
+    ubyte[] script_climb = [30, 0, 26, input.RIGHT, 20, input.FIRE, 25, input.FIRE | input.RIGHT, 10, input.RIGHT, 0, 0]
+    ubyte[] script_drill = [30, 0, 75, input.LEFT | input.DOWN, 20, 0, 10, input.FIRE | input.DOWN, 0, 0]
+    ubyte track
+    ubyte[8] hist_plat
+    ubyte hist_n
+    ubyte[8] hist_col
+    ubyte hist_cn
+    ubyte last_takes
+    uword test_frames
+    uword reached_at                    ; frame when the tracked enemy first stood on its target platform
+
+    sub route_hud() {
+        ; Row 1: p=platforms the enemy stood on, in order (ids of the map in use at the time); c=take-off
+        ; columns of the links it took (repeats of the same link left out). Row 2: r=map rebuilds,
+        ; d/m/w=route decisions, mistakes, wanders, a=frame when it reached its target, s=player state and y,
+        ; z=frame count, e=player platform and the enemy's target platform.
+        test_frames++
+        ubyte i = track
+        if actors.state[i] == enemies.GROUNDED {
+            ubyte p = nav.platform_under(actors.x[i], actors.y[i], true)
+            if (hist_n == 0 or hist_plat[hist_n - 1] != p) and hist_n < len(hist_plat) {
+                hist_plat[hist_n] = p
+                hist_n++
+            }
+            if reached_at == 0 and p != nav.NONE and p == nav.dbg_target[i] and nav.dbg_plat[i] == p
+                reached_at = test_frames
+        }
+        if nav.dbg_takes[i] != last_takes {
+            last_takes = nav.dbg_takes[i]
+            ubyte c = nav.link_col[nav.dbg_link[i]]
+            if (hist_cn == 0 or hist_col[hist_cn - 1] != c) and hist_cn < len(hist_col) {
+                hist_col[hist_cn] = c
+                hist_cn++
+            }
+        }
+        if test_frames == 1 {
+            sys.memset(video.COLOR_RAM + 40, 80, video.COLOR_HUD)
+            sys.memset(video.SCREEN + 40, 80, video.CHAR_SPACE)
+        }
+        test_text(0, sc:"p")
+        for i in 0 to 7 {
+            if i < hist_n
+                test_hex(1 + i * 2, hist_plat[i])
+        }
+        test_text(18, sc:"c")
+        for i in 0 to 7 {
+            if i < hist_cn
+                test_hex(19 + i * 2, hist_col[i])
+        }
+        test_text(40, sc:"r")
+        test_hex(41, nav.rebuilds)
+        test_text(44, sc:"d")
+        test_hex(45, nav.n_routes)
+        test_text(47, sc:"m")
+        test_hex(48, nav.n_mistakes)
+        test_text(50, sc:"w")
+        test_hex(51, nav.n_wanders)
+        test_text(54, sc:"a")
+        test_hex(55, msb(reached_at))
+        test_hex(57, lsb(reached_at))
+        test_text(60, sc:"s")
+        test_hex(61, actors.state[0])
+        test_hex(63, actors.y[0])
+        test_text(66, sc:"z")
+        test_hex(67, msb(test_frames))
+        test_hex(69, lsb(test_frames))
+        test_text(72, sc:"e")
+        test_hex(73, nav.platform_under(actors.x[0], actors.y[0], actors.state[0] == player.GROUNDED))
+        test_hex(76, nav.dbg_target[track])
     }
 
     sub spawn_soak() {
@@ -382,6 +760,18 @@ main {
     }
 
     sub test_hud() {
+        if TEST == 12 {
+            ; no readout (it would take too long here): HUD cols 30-35 = map rebuilds, dropped frames
+            player.invuln_timer = 8
+            hex_byte(30, nav.rebuilds)
+            hex_byte(33, video.late_frames)
+            hex_byte(26, nav.slowest_build)
+            return
+        }
+        if TEST == 10 or TEST == 11 {
+            route_hud()
+            return
+        }
         ; char row 1: s=player state y=player y c=chain i=invuln frames k/b/h=kills, bonks, hits
         ; e=enemy 1-5 states (6 dead, 7 warning) w=frames the player overlapped a warning enemy
         ; cols 38-39: frames with an active enemy's box inside a solid tile
@@ -419,6 +809,8 @@ main {
         test_text(35, sc:"w")
         test_hex(36, warn_overlap)
         test_hex(38, enemy_inside)
+        hex_byte(30, nav.rebuilds)      ; HUD row: map rebuilds this level, dropped frames
+        hex_byte(33, video.late_frames)
     }
 
     sub test_text(ubyte col, str text) {
@@ -432,6 +824,20 @@ main {
 
     sub hex_char(ubyte n) -> ubyte {
         return if n < 10 n + 48 else n - 9
+    }
+
+    sub nav_debug() {
+        ubyte i
+        ubyte col = 0
+        for i in enemies.FIRST to enemies.LAST {
+            hex_byte(col, nav.dbg_plat[i])
+            hex_byte(col + 2, nav.dbg_target[i])
+            hex_digit(col + 4, nav.plan[i])
+            @(video.SCREEN + col + 5) = video.CHAR_SPACE
+            col += 6
+        }
+        sys.memset(video.SCREEN + col, 40 - col, video.CHAR_SPACE)
+        hex_byte(38, nav.rebuilds)
     }
 
     ; ---- self-test readout ----

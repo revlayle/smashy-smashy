@@ -1,11 +1,12 @@
-; Level generation and validation (spec section 7): shelf bands of jittered platforms, a reachability BFS
-; over standing cells, treasure placement, retries and a fixed fallback layout.
+; Level generation and validation (spec section 7): shelf bands of jittered platforms, an enemy route check
+; (nav.p8), a reachability BFS over standing cells, treasure placement, retries and a fixed fallback layout.
 
 %import math
 %import video
+%import nav
 
 levelgen {
-    const ubyte MAX_ATTEMPTS = 10
+    const ubyte MAX_ATTEMPTS = 30
     const ubyte MIN_REACHABLE = 30
     const ubyte TREASURES = 10
     const ubyte TREASURE_SPACING = 3    ; min distance between treasures: |dcol| >= 3 or |drow| >= 3
@@ -106,6 +107,8 @@ levelgen {
             attempts++
             make_layout()
             if not bands_connected()
+                continue
+            if not nav.enemies_reach_top()
                 continue
             if not explore()
                 continue

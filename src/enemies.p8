@@ -1,11 +1,12 @@
-; Enemies (spec section 6): 5 enemies on sprites 1-5 with the shared actor physics, the simple AI,
-; contact with the player (kill, stomp, hit) and respawning with a warning flicker.
+; Enemies (spec section 6): 5 enemies on sprites 1-5 with the shared actor physics, contact with the player
+; (kill, stomp, hit) and respawning with a warning flicker. The navigation AI (nav.p8) decides where to go.
 
 %import actors
 %import player
 %import score
 %import levelgen
 %import video
+%import nav
 
 enemies {
     const ubyte FIRST = 1
@@ -21,11 +22,11 @@ enemies {
     ; [TUNE]
     const ubyte BASE_SPEED = 12         ; 1/16 px per frame at level 1, +1 per level
     const ubyte MAX_SPEED = 22
-    const ubyte JUMP_HEIGHT = 64        ; px, at the player's rise speed
+    const ubyte JUMP_HEIGHT = 80        ; px, at the player's rise speed
     const ubyte RESPAWN_SECS = 10       ; at level 1, -1 per level
     const ubyte MIN_RESPAWN_SECS = 3
     const ubyte WARNING_FRAMES = 50
-    const ubyte DECIDE_MASK = 7         ; enemy i decides on frames where (frame & 7) == i, so one per frame
+    const ubyte DECIDE_MASK = 7         ; enemy i may decide on frames where (frame & 7) == i, so one per frame
 
     const ubyte PLAYER_DIST = 8         ; spawn at least this far from the player (Manhattan, tiles)
     const ubyte ENEMY_SPACING = 3       ; and this far from other enemies (|dcol| >= 3 or |drow| >= 3)
@@ -33,19 +34,22 @@ enemies {
     const ubyte PICK_WORK = 4           ; spawn tries or fallback-scan cells per frame, shared by all enemies
                                         ; (only on frames without an AI decision, so the two never add up)
 
-    ; set by ai_decide(), carried out by move()
+    ; set by the navigation AI, carried out by move()
     const ubyte DIR_NONE = 0
     const ubyte DIR_RIGHT = 1
     const ubyte DIR_LEFT = 2
     const ubyte EDGE_STOP = 0           ; stand still at a platform edge
-    const ubyte EDGE_TURN = 1           ; turn around at a platform edge
+    const ubyte EDGE_TURN = 1           ; turn around at a platform edge or a wall
     const ubyte EDGE_DROP = 2           ; walk off platform edges
 
+    ubyte level
     ubyte speed                         ; walk speed this level
     ubyte respawn_secs                  ; respawn delay this level
     ubyte frame
 
     ubyte[actors.COUNT] walk_dir
+    bool[actors.COUNT] goal_on          ; walk toward goal_x (never past it) instead of in walk_dir
+    uword[actors.COUNT] goal_x
     ubyte[actors.COUNT] edge_mode
     bool[actors.COUNT] jump_req
     ubyte[actors.COUNT] rise_left
@@ -65,7 +69,8 @@ enemies {
     ubyte n_bonks
     ubyte n_hits
 
-    sub new_level(ubyte level) {
+    sub new_level(ubyte lvl) {
+        level = lvl
         ; speed = min(12 + (level - 1), 22), respawn = max(10 - (level - 1), 3) s
         speed = MAX_SPEED
         if level <= MAX_SPEED - BASE_SPEED
@@ -110,6 +115,7 @@ enemies {
         walk_dir[i] = DIR_NONE
         edge_mode[i] = EDGE_STOP
         jump_req[i] = false
+        nav.reset(i)
     }
 
     ; Spawn spot picking, spread over frames: each random try or fallback-scan cell costs one unit of
@@ -203,10 +209,15 @@ enemies {
 
     sub update() {
         frame++
-        ubyte i = frame & DECIDE_MASK
-        pick_work = PICK_WORK
-        if i >= FIRST and i <= LAST and actors.state[i] < DEAD and not frozen
-            pick_work = 0               ; an enemy decides this frame
+        ; At most one enemy decides per frame. Frames without a decision do spawn picking.
+        ubyte decider = frame & DECIDE_MASK
+        if frozen or decider < FIRST or decider > LAST or actors.state[decider] != GROUNDED or nav.commit[decider] != 0
+            decider = 0
+        pick_work = 0
+        if decider == 0
+            pick_work = PICK_WORK
+
+        ubyte i
 
         for i in FIRST to LAST {
             when actors.state[i] {
@@ -230,8 +241,9 @@ enemies {
                 }
                 else -> {
                     if not frozen {
-                        if frame & DECIDE_MASK == i
-                            ai_decide(i)
+                        if i == decider
+                            nav.decide(i)
+                        nav.steer(i)
                         move(i)
                     }
                 }
@@ -244,11 +256,26 @@ enemies {
         ubyte st = actors.state[i]
         ubyte d
         bool blocked
+        uword room
 
-        ; horizontal
+        ; horizontal: toward the goal and never past it, or in walk_dir
+        if goal_on[i] {
+            uword gx = goal_x[i]
+            uword ex = actors.x[i]
+            if ex < gx {
+                set_dir(i, DIR_RIGHT)
+                room = gx - ex
+            } else if ex > gx {
+                set_dir(i, DIR_LEFT)
+                room = ex - gx
+            } else
+                walk_dir[i] = DIR_NONE
+        }
         if walk_dir[i] != DIR_NONE {
             d = actors.advance(actors.x_frac[i], speed)
             actors.x_frac[i] = actors.new_frac
+            if goal_on[i] and room < d
+                d = lsb(room)
             if st == GROUNDED and edge_mode[i] != EDGE_DROP and at_edge(i, d) {
                 if edge_mode[i] == EDGE_TURN
                     turn(i)
@@ -257,8 +284,8 @@ enemies {
                     blocked = actors.move_right(i, d)
                 else
                     blocked = actors.move_left(i, d)
-                if blocked and st == GROUNDED
-                    wall_ahead(i)
+                if blocked and edge_mode[i] == EDGE_TURN
+                    turn(i)
             }
         }
 
@@ -322,42 +349,6 @@ enemies {
         return not actors.solid_at(lead, actors.y[i] + actors.BOX_H)
     }
 
-    sub wall_ahead(ubyte i) {
-        ; Rule 3: blocked by a wall while grounded. Jump if the step is at most 3 tiles high and the rise is
-        ; clear, otherwise turn around. The screen edge is too high.
-        ubyte wall_col
-        if walk_dir[i] == DIR_RIGHT {
-            if actors.x[i] + actors.BOX_W >= 320 {
-                turn(i)
-                return
-            }
-            wall_col = lsb((actors.x[i] + actors.BOX_W) >> 4)
-        } else {
-            if actors.x[i] == 0 {
-                turn(i)
-                return
-            }
-            wall_col = lsb((actors.x[i] - 1) >> 4)
-        }
-        ubyte row = actors.y[i] >> 4
-        ubyte h = 0
-        while h <= 3 and row >= h and video.tiles[video.row_start[row - h] + wall_col] - 1 < 3
-            h++
-        if h > 3 or row < h {
-            turn(i)
-            return
-        }
-        ubyte k
-        for k in 1 to h {
-            ubyte top = actors.y[i] - (k << 4)
-            if actors.solid_at(actors.x[i], top) or actors.solid_at(actors.x[i] + actors.BOX_W - 1, top) {
-                turn(i)
-                return
-            }
-        }
-        jump_req[i] = true
-    }
-
     sub turn(ubyte i) {
         if walk_dir[i] == DIR_RIGHT
             set_dir(i, DIR_LEFT)
@@ -371,114 +362,6 @@ enemies {
             actors.facing[i] = actors.FACE_RIGHT
         else if dir == DIR_LEFT
             actors.facing[i] = actors.FACE_LEFT
-    }
-
-    ; ---- simple AI (spec section 6, phase 5a). Phase 5b replaces ai_decide(). ----
-    sub ai_decide(ubyte i) {
-        ; Sets walk_dir, edge_mode and jump_req. Rule 1 (walk to treasures) waits for phase 6 (pickup).
-        ; Rule 3 (walls) is handled by move(). Decisions are made only on the ground.
-        if actors.state[i] != GROUNDED
-            return
-        ubyte toward = DIR_NONE
-        uword px = actors.x[0]          ; locals: prog8c 12.3.4 miscompiles x[0] > x[i] + 4 (split word array)
-        uword ex = actors.x[i]
-        if px > ex + 4
-            toward = DIR_RIGHT
-        else if px + 4 < ex
-            toward = DIR_LEFT
-        ubyte ahead = toward
-        if ahead == DIR_NONE
-            ahead = if actors.facing[i] == actors.FACE_LEFT DIR_LEFT else DIR_RIGHT
-
-        ubyte p_row = (actors.y[0] + actors.BOX_H - 1) >> 4   ; row of the player's box bottom
-        ubyte e_row = actors.y[i] >> 4
-        if p_row == e_row {
-            ; same row: walk toward the player, stop at edges
-            set_dir(i, toward)
-            edge_mode[i] = EDGE_STOP
-        } else if p_row > e_row {
-            ; player lower: walk toward the player and walk off edges
-            set_dir(i, ahead)
-            edge_mode[i] = EDGE_DROP
-        } else {
-            ; player higher: jump onto a platform 1-3 tiles up within 2 columns ahead, else wander
-            if jump_spot(i, ahead) {
-                set_dir(i, ahead)
-                edge_mode[i] = EDGE_STOP
-                jump_req[i] = true
-            } else if walk_dir[i] != DIR_NONE and jump_spot(i, walk_dir[i]) {
-                edge_mode[i] = EDGE_STOP
-                jump_req[i] = true
-            } else {
-                if walk_dir[i] == DIR_NONE or edge_mode[i] != EDGE_TURN
-                    set_dir(i, nearest_end(i))
-                edge_mode[i] = EDGE_TURN
-            }
-        }
-    }
-
-    sub jump_spot(ubyte i, ubyte dir) -> bool {
-        ; A solid tile k = 1-3 rows above the enemy's standing surface, 1-2 columns ahead, with an empty cell on
-        ; top of it, and the enemy's own rise k rows up clear. Works on tile map indices (the enemy is grounded,
-        ; so its box is tile-aligned vertically).
-        ubyte lc = lsb(actors.x[i] >> 4)                    ; columns under the box's left and right edges
-        ubyte rc = lsb((actors.x[i] + actors.BOX_W - 1) >> 4)
-        ubyte col = col_of(i)
-        ubyte c1 = NO_COL                                   ; the two columns ahead
-        ubyte c2 = NO_COL
-        if dir == DIR_RIGHT {
-            if col < video.MAP_W - 1
-                c1 = col + 1
-            if col < video.MAP_W - 2
-                c2 = col + 2
-        } else {
-            if col >= 1
-                c1 = col - 1
-            if col >= 2
-                c2 = col - 2
-        }
-        ubyte row = actors.y[i] >> 4
-        ubyte up = video.row_start[row]                     ; index of column 0 in row - k
-        ubyte below                                         ; and in row + 1 - k
-        repeat 3 {
-            if up == 0
-                return false                                ; top row reached
-            below = up
-            up -= video.MAP_W
-            if video.tiles[up + lc] - 1 < 3 or video.tiles[up + rc] - 1 < 3
-                return false                                ; rise blocked
-            if c1 != NO_COL and video.tiles[below + c1] - 1 < 3 and video.tiles[up + c1] - 1 >= 3
-                return true
-            if c2 != NO_COL and video.tiles[below + c2] - 1 < 3 and video.tiles[up + c2] - 1 >= 3
-                return true
-        }
-        return false
-    }
-    const ubyte NO_COL = 255
-
-    sub nearest_end(ubyte i) -> ubyte {
-        ; Direction of the nearer end of the platform the enemy stands on.
-        ubyte col = col_of(i)
-        ubyte start = video.row_start[actors.y[i] >> 4] + col
-        ubyte p = start
-        ubyte c = col
-        ubyte left = 0
-        while c != 0 and video.tiles[p - 1] - 1 >= 3 and video.tiles[p - 1 + video.MAP_W] - 1 < 3 {
-            c--
-            p--
-            left++
-        }
-        p = start
-        c = col
-        ubyte right = 0
-        while c != video.MAP_W - 1 and video.tiles[p + 1] - 1 >= 3 and video.tiles[p + 1 + video.MAP_W] - 1 < 3 {
-            c++
-            p++
-            right++
-        }
-        if left < right
-            return DIR_LEFT
-        return DIR_RIGHT
     }
 
     ; ---- contact with the player (spec section 6), after both have moved ----

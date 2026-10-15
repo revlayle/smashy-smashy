@@ -244,7 +244,32 @@ video {
         return true                     ; chain to the KERNAL IRQ (keyboard scan)
     }
 
+    sub frame_lines() -> ubyte {
+        ; Raster lines since the frame IRQ line (0-255; later lines read as 255). Only meaningful while the
+        ; update hasn't run past the next frame IRQ (frame_ready still false).
+        ubyte hi
+        ubyte lo
+        do {
+            hi = c64.SCROLY & $80
+            lo = c64.RASTER
+        } until hi == c64.SCROLY & $80
+        const ubyte IRQ_LINE = lsb(FRAME_IRQ_LINE)
+        const ubyte TO_WRAP = 312 - FRAME_IRQ_LINE  ; lines from the IRQ line to line 0
+        const ubyte TO_256 = 256 - FRAME_IRQ_LINE
+        if hi != 0
+            return lo + TO_256                      ; lines 256-311
+        if lo >= IRQ_LINE
+            return lo - IRQ_LINE
+        if lo >= 255 - TO_WRAP
+            return 255
+        return lo + TO_WRAP                         ; lines 0-250 of the next screen
+    }
+
+    ubyte late_frames                   ; self-test: updates that ran past the next frame IRQ (dropped frames)
+
     sub wait_frame() {
+        if frame_ready
+            late_frames++
         while not frame_ready {
         }
         frame_ready = false

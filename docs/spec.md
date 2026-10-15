@@ -9,7 +9,7 @@ Items marked **[DECIDE]** are proposals waiting for the designer's confirmation.
 
 - Target: PAL C64, 50 frames/s, Prog8 `-target c64`, 64tass. NTSC is not a goal (timer and speeds would run 20% fast).
 - One game update per frame. Frame sync: a raster IRQ at line 251 (bottom border) copies the sprite shadow registers to the VIC and sets a `frame_ready` flag; the main loop waits on it.
-- Per-frame order: wait for frame → write sprite registers from state computed last frame → read joystick → update player → update enemies → resolve collisions → apply queued tile changes to screen → update HUD (only changed digits).
+- Per-frame order: wait for frame → write sprite registers from state computed last frame → read joystick → update player → update enemies → resolve collisions → apply queued tile changes to screen → update HUD (only changed digits) → platform-map rebuild slices in the time left (§6).
 - Frame budget is roughly 18,000 CPU cycles. If it overruns, enemy AI decisions (not movement) run on alternating frames, e.g. enemies 1,3,5 on even frames and 2,4 on odd.
 - 1 second = 50 frames. All timers count frames or seconds as integers.
 
@@ -140,7 +140,7 @@ Bonks are unlimited: an enemy can be bonked again as soon as the player comes ba
 ### Movement
 - Same physics routine as the player, minus fast-fall.
 - Speed per level: `enemy_speed = min(12 + (level - 1), 22)` subpx/f, i.e. 50% of the player at level 1, reaching the 91.7% cap (the closest step under 95%) at level 11. **[TUNE]**
-- Jump: constant rise at the player's rise speed, max 64 px (4 tiles), so an enemy reliably climbs a step of up to 3 tiles. That covers the normal 3-tile gap between platform bands.
+- Jump: constant rise at the player's rise speed, max 80 px (5 tiles), so an enemy reliably climbs a step of up to 4 tiles. That covers the normal 3-tile gap between platform bands and most jittered ones. (64 px until phase 5b playtesting.)
 - Enemies pass through each other (no enemy-enemy collision).
 
 ### Simple AI (phase 5a; replaced by the navigation AI in phase 5b)
@@ -158,29 +158,32 @@ Decisions at most every 8 frames per enemy, staggered so at most one enemy decid
 
 **Measured after phase 5a** (from the frame IRQ line, so the IRQ and KERNAL keyboard scan count; 312 lines per frame): worst frame about 200-206 lines with 5 live enemies and respawns; 81 lines with enemy updates switched off. One enemy decision costs up to about 35 lines, one enemy move about 10-15.
 
-**Platform map.** Built after level generation, kept in program RAM (BSS):
-- A **platform** is a maximal horizontal run of standing cells (empty cell above solid/damaged/floor) on one row. Max 32 platforms; extras are ignored (treated as unreachable). `platform_of[240]` maps each cell to its platform (255 = none).
-- **Links** from platform P, each storing the take-off column, the direction and the target platform:
-  - *Walk off*: from the cell just past P's left or right end, if empty, falling straight down to the first standing cell.
-  - *Jump up*: to a platform Q 1-3 rows higher. Take-off column is the column just past Q's left or right end, which must lie on P, with clear cells from P's row up to Q's row. The enemy rises in that column, then moves 1 column sideways onto Q. Conservative on purpose: it never includes a jump an enemy can't make.
-- `next_link[P * 32 + Q]`: the first link to take from P to reach Q (255 = no route). `hops[P * 32 + Q]`: route length in links (255 = no route). Both from one BFS per platform over the link graph. 2 KB total.
-- **Rebuild** when a tile is destroyed. The rebuild is time-sliced (a few platforms per frame) into a second copy of the tables, then swapped in. Enemies use the old tables until then. A rebuild must never cause a dropped frame.
+**Measured after phase 5b** (same method): worst frame 202 lines with 5 live enemies (TEST 7 and 8), 247-253 lines with 5 live enemies while the player drills and the map is rebuilt; 0 dropped frames.
 
-**Targets.** The player's platform is the one under the player's box. If the player is airborne, it is the first standing cell found by scanning straight down from the box centre.
+**Platform map.** Built after level generation, kept in program RAM (BSS and `memory()` slabs, about 6 KB for both table sets):
+- A **platform** is a maximal horizontal run of standing cells (a non-solid cell, empty or treasure, above solid/damaged/floor) on one row. Max 32 platforms; extras are ignored (treated as unreachable). `platform_of[220]` maps each cell to its platform (255 = none). Ids are given in row order, top to bottom.
+- **Links** from platform P, each storing the take-off column, the kind (walk off or jump, left or right) and the target platform:
+  - *Walk off*: from the cell just past P's left or right end, if not solid, falling straight down to the first standing cell. The enemy walks until its box is centred in that column, so it falls straight down.
+  - *Jump up*: to a platform Q 1-4 rows higher. Take-off column is the column just past Q's left or right end, which must lie on P, with clear cells from P's row up to **one row above** Q's row, and the cell above Q's end column clear too. The enemy walks to the take-off column (box centred), rises, and once its box is above Q's tiles moves 1 column sideways onto Q. The headroom row gives it about 17 frames for the sideways move; without it, a ceiling right above Q's row leaves a 1-frame window and the jump fails. Platforms on row 0 have no headroom row, so no jump link leads to them. Conservative on purpose: it never includes a jump an enemy can't make (replayed with the physics on several thousand links, phase 5b).
+- `next_link[P * 32 + Q]`: the first link to take from P to reach Q (255 = no route). `hops[P * 32 + Q]`: route length in links (255 = no route). Both from one BFS per platform over the link graph. 2 KB per table set.
+- **Rebuild** when a tile is destroyed, into a second copy of the tables, then swapped in. Enemies use the old tables until then. A rebuild must never cause a dropped frame. It runs in slices at the end of the frame update: one tile row, one platform's links, or 24 BFS steps per slice. A slice takes up to about 70 raster lines (measured, also with 32 platforms), and slices only start while the frame is less than 185 lines past the frame IRQ. A rebuild takes about 25-30 frames with 5 enemies active. Destroying another tile restarts it.
+
+**Targets.** The player's platform is the one under the player's box (the box centre's cell, else either box edge's cell when standing on an edge). If the player is airborne, it is the first standing cell found by scanning straight down from the box centre.
 
 **Decision** (every 8 frames per enemy, staggered):
-- Same platform as the target → walk toward the target's x.
-- Different platform → look up `next_link`. Walk to its take-off column, then walk off or jump. A jump that doesn't land on the expected platform within 60 frames → re-decide.
-- No route → wander on the platform; 1 in 4 decisions walk off an edge, if one has a walk-off link.
-- Mistakes: with probability `max(16 - level, 4)` in 64, take a random link instead of the planned one. **[TUNE]**
+- Decisions are made only on the ground.
+- Same platform as the target → walk toward the target's x (kept on the platform), then stand.
+- Different platform → look up `next_link`. Walk to its take-off column, then walk off or jump. Taking a link commits the enemy to it: no decisions until it lands, or until 60 frames have passed (then it re-decides; usually the same link again if the take-off is far away).
+- No route → head for the platform reachable from here that is nearest the target (rows apart plus the column gap; ties go to fewer hops) and wait there; on the enemy's own platform, walk to the spot nearest the target. The chase resumes as soon as the target is reachable. (Designer decision after phase 5b playtesting; it replaced "wander, 1 in 4 decisions walk off an edge", which left enemies pacing the floor.) Wander (turning at edges and walls) only when the enemy or the target is on no mapped platform.
+- Mistakes: with probability `max(16 - level, 4)` in 64, take a random link of the platform instead of the planned one. Rolled once per link choice. **[TUNE]**
 
 **Roles.** Assigned by enemy slot at spawn and respawn:
 
 | Slots | Role | Target |
 |---|---|---|
 | 1, 2 | Chaser | the player's platform |
-| 3 | Ambusher | the platform the player is heading toward: the end of the player's platform in the player's facing direction, or the landing platform when airborne |
-| 4, 5 | Hunter | the nearest platform with a free treasure (by `hops`), else the player's platform |
+| 3 | Ambusher | the platform the player is heading toward: the end of the player's platform in the player's facing direction (the ambusher goes to that end of the player's platform), or the landing platform when airborne |
+| 4, 5 | Hunter | the nearest platform with a free treasure (by `hops`), else the player's platform. Until pickup exists (phase 6) a hunter walks to the treasure and stands on it. |
 
 **Carrier.** An enemy holding a treasure switches to the carrier role, whatever its slot:
 - Target is the **hideout**: the platform with the largest `hops` from the player's platform, reachable from the carrier's current platform. Ties go to platforms with more than one outgoing link (avoids dead ends).
@@ -204,14 +207,15 @@ Decisions at most every 8 frames per enemy, staggered so at most one enemy decid
 Grid is 20 x 12. Row 11 = floor. The spawn zone (columns 8-11, rows 0-1) is kept clear.
 
 ### Platform layout
-1. Shelf bands at base rows 2, 5 and 8 (3 tiles apart), each platform jittered ±1 row. A band-2 platform jittered to row 1 that would overlap columns 8-11 stays at row 2 (spawn zone). The worst case after jitter is a 5-tile gap, which the player's 96 px jump still clears. Enemies (3-tile climb) can use every un-jittered gap, so they can always work their way upward somewhere unless the player drills the route away (intended: trapping enemies below is a strategy).
+1. Shelf bands at base rows 2, 5 and 8 (3 tiles apart), each platform jittered ±1 row. A band-2 platform jittered to row 1 that would overlap columns 8-11 stays at row 2 (spawn zone). The worst case after jitter is a 5-tile gap, which the player's 96 px jump still clears. Enemies (4-tile climb) can use every un-jittered gap, so they can always work their way upward somewhere unless the player drills the route away (intended: trapping enemies below is a strategy).
 2. Each band gets 2-4 platform segments, 3-8 tiles long, with gaps of 2+ tiles so the player can jump up through them.
 3. Each band must contain at least one platform within 3 tiles above some platform in the band below (horizontally within 3 columns), so enemies have a way up. No stair ledges needed. "Within 3 columns" means the column ranges overlap or the gap between them is at most 3 columns. The bottom band's partner is the floor (a platform at row 8 or 9). A layout that fails this counts as a failed attempt.
 
 ### Validation
 - BFS over "standing cells" (empty cell with solid/damaged/floor below), starting from where the player lands below the spawn point. Edges: walk left/right, fall off edges (falls straight down), jump (up to 5 tiles up, landing within 3 columns).
   - Jump model: rise straight up k rows (1-5) in the start column, then move up to 3 columns sideways along row r - k. Every cell on that path must be empty. With k = 1 the jump can also land across a gap on the start row. This is a simplified, conservative model of the real arc: it can miss some jumps the player can make, but every jump it accepts is possible.
-- Regenerate if fewer than 30 standing cells are reachable, or if any treasure cell is unreachable. After 10 failures, use a fixed fallback layout.
+- **Enemy route check:** build the enemy platform map (§6) and regenerate unless an enemy starting on the floor can reach a platform in the top band (standing rows 1-2) by its links. Without it, rule 3's "within 3 columns" let most levels (55-70%) strand enemies on the lower bands, because an enemy jump only steps 1 column sideways.
+- Regenerate if fewer than 30 standing cells are reachable, or if any treasure cell is unreachable. After 30 failures, use a fixed fallback layout (it passes all checks).
 - Drilling makes everything below the player reachable anyway. Validation guarantees the player can also get back up.
 - Designer: a treasure that occasionally needs drilling to reach is fine, so a missed or wrong jump in the model is not a bug to chase.
 
@@ -227,7 +231,7 @@ Grid is 20 x 12. Row 11 = floor. The spawn zone (columns 8-11, rows 0-1) is kept
 `math.rnd()`, masked and retried for ranges (`levelgen.rand_below`; `math.randrange()` does a 16-bit multiply and is several times slower). Seeded once with `math.rndseed()` from the CIA1 timer and raster line at the moment fire is pressed on the title screen. Until the title screen exists (phase 7), it is seeded at startup.
 
 ### Time
-Generation must finish within 50 frames. Measured: typical 4-9 frames; worst case (10 failed attempts, then the fallback) 40 frames.
+A level start can take 2-3 seconds (designer decision, phase 5b: a READY delay or a wait for the player will cover it in phase 7); it must not take much longer. Measured on 200 levels with the 80 px enemy jump: 0 fallbacks, at most 6 attempts, slowest 22 frames. Worst case (30 failed attempts, then the fallback) 119 frames (2.4 s).
 
 ## 8. Scoring and timer
 
@@ -340,13 +344,15 @@ Each milestone ends with something playable in VICE. **The detailed plan, with s
 None at the moment.
 
 ### Resolved
-- Enemy climbing: enemy jump raised to 64 px, player jump to 96 px. No stair ledges. Drilling away an enemy's route is allowed strategy.
+- Enemy climbing: enemy jump raised to 64 px, then 80 px (phase 5b); player jump 96 px. No stair ledges. Drilling away an enemy's route is allowed strategy.
 - Stomp (landing on an enemy without fast-fall): 24 px bounce, no score, enemy survives, carried treasure drops.
 - Air control: full, at run speed, except during fast-fall, which drops straight down.
 - Timer runs during the post-hit float; the float is fast (4 px/f, < 1 s worst case).
 - Unlimited bonks on the same enemy (1 s stun is the noted alternate). Jumping up into an enemy is a hit.
 - Respawning enemies flicker harmlessly for 1 s before activating.
 - Phase 5a decisions: down must be released after a kill before it fast-falls again; level-start enemies flicker like respawns; simple-AI rule 1 (walk to treasures) waits for pickup in phase 6.
+- Phase 5b decisions: level generation rejects layouts where enemies can't climb from the floor to the top band (enemy route check, §7). Generation may take 2-3 s; no frame limit.
+- Phase 5b playtest: enemies with no route go as close to the target as they can instead of wandering; enemy jump 80 px (climbs 4-row steps).
 - 3 s pickup cooldown for an enemy that just lost a treasure.
 - Pause on Run/Stop. Session high score in RAM.
 - Bonks chain: a bonk's bounce can land on another enemy for another bonk. Bonks score nothing and leave the fast-fall kill chain unchanged: they neither advance it nor reset it (only landing on a tile resets it).

@@ -4,6 +4,7 @@
 %import actors
 %import input
 %import score
+%import nav
 
 player {
     const ubyte GROUNDED = 0
@@ -200,7 +201,8 @@ player {
             target_idx = NO_TARGET      ; the redraw removed the highlight
         if video.tiles[idx] != video.T_EMPTY
             return false                ; was solid, now damaged: normal landing
-        ; destroyed: centre the box over the hole so the fast-fall continues through it
+        ; destroyed: the enemies' platform map changes. Centre the box over the hole so the fast-fall continues.
+        nav.tile_destroyed()
         actors.x[0] = (col as uword << 4) + (16 - actors.BOX_W) / 2
         actors.x_frac[0] = 0
         return true

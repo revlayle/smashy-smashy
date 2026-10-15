@@ -216,7 +216,7 @@ Done when:
 - Code+data `$0801-$3B1B`, BSS to `$415C`. No `floats` import. 15 compiler warnings, all "always true/false" from `const bool`/`const ubyte` switches and the test-only `enemies.frozen`.
 
 ## Phase 5b: Navigation AI
-**Status:** not started
+**Status:** done
 **Spec:** §6 navigation AI (not the carrier role; that is phase 6)
 
 Build:
@@ -226,11 +226,30 @@ Build:
 - Debug view (behind a `const bool` switch): show each enemy's current platform and target platform as hex on the HUD row, or recolour the target platform's tiles.
 
 Done when:
-- [ ] Platform map check on 20 generated levels: every link is valid when replayed by the physics (a test build makes one enemy walk each link in turn and checks it lands on the expected platform). Note any failures and fix the link rules.
-- [ ] Scripted test: player waits on an upper platform → a chaser on a lower band reaches the player's platform by a jump route, not by wandering.
-- [ ] Scripted test: player drills a hole that cuts a route → the map is rebuilt and enemies take the new route. No dropped frame during the rebuild (worst-frame raster measure).
-- [ ] Worst frame with 5 enemies stays under 260 raster lines, measured the same way as phase 5a (`main.FRAME_STATS`, from the frame IRQ line, IRQ and KERNAL scan included; 5a result 200-203). Note the number.
-- [ ] Report lists feel items for the designer: how threatening enemies feel, mistake rate, decision interval.
+- [x] Platform map check on 20 generated levels: every link is valid when replayed by the physics (a test build makes one enemy walk each link in turn and checks it lands on the expected platform). Note any failures and fix the link rules.
+- [x] Scripted test: player waits on an upper platform → a chaser on a lower band reaches the player's platform by a jump route, not by wandering.
+- [x] Scripted test: player drills a hole that cuts a route → the map is rebuilt and enemies take the new route. No dropped frame during the rebuild (worst-frame raster measure).
+- [x] Worst frame with 5 enemies stays under 260 raster lines, measured the same way as phase 5a (`main.FRAME_STATS`, from the frame IRQ line, IRQ and KERNAL scan included; 5a result 200-203). Note the number.
+- [x] Report lists feel items for the designer: how threatening enemies feel, mistake rate, decision interval.
+
+**Notes:**
+- New `src/nav.p8`: platform map (`platform_of`, platforms, links, `next_link`, `hops`) in two table sets, decisions (`decide`) and plan execution (`steer`). The simple AI is gone from `enemies.p8`; `move()` now walks toward a goal x (never past it) or in `walk_dir`, and turns at walls only while wandering.
+- Plans: stand, walk to a spot, wander, walk off (walk until the box is centred in the column past the end, then fall straight), jump (walk to the take-off column, rise, step sideways onto the target once the box is above its tiles). Taking a link commits the enemy until it lands or 60 frames pass; no decisions meanwhile. Decisions only on the ground, every 8 frames per enemy, staggered as before.
+- Link rule change (spec §6): a jump link also needs a clear headroom row above the target's row (in the take-off column and above the target's end), so row-0 platforms get no jump links. Without it a ceiling just above the target leaves a 1-frame window for the sideways step.
+- Link replay (TEST 9): 20 levels, 418-424 links, 0 failures, 0 timeouts, 0 frames inside a tile. Also 200 levels with 6 random holes each (5565 links), 20 levels with 8 holes (541-633 links) and with 8 holes at the speed cap (560-612 links): all 0 failures. Enemies start at the far end of the platform, so the walk to the take-off is tested too.
+- Chaser route (TEST 10, fallback layout, mistakes off): the player climbs to the row-1 platform on the right. Enemy 1 goes floor → left row-7 platform → row-4 platform → the player's platform with take-offs at columns 5, 3 and 12: 7 route decisions, 0 wanders, 0 mistakes. It arrives at frame 545 (about 11 s at level-1 speed).
+- Route cut (TEST 11, fallback layout): a hunter on the floor heads for the left take-off (column 5) toward a treasure on row 4. The player drills tile (3, 8) away, the map is rebuilt once, and the hunter turns around and takes the right side (take-offs 14, then 16). Worst frame 252 lines, 0 dropped frames.
+- Frame budget (`FRAME_STATS`, measured as in 5a): TEST 7 and 8 (5 live enemies, scripted run, respawns) 202 lines. TEST 12 (new: 5 live enemies, the player drills down 5 columns while invulnerable, many rebuilds) 247 and 253 lines. 0 dropped frames in all (new `video.late_frames` counts updates that run past the next frame IRQ).
+- Rebuild timing: one slice per frame on non-decision frames (the first version) dropped frames in TEST 12. Rebuild slices now run at the end of the frame (`nav.idle_build()`) and only start before line 185 after the frame IRQ. Slice costs (TEST 13, raster lines): row scan up to about 50 (assembly), one platform's links up to 69, a BFS slice (24 steps) up to 69, also on a 32-platform worst-case layout. The BFS is resumable and the link search only looks at platforms 1-3 rows up (ids are in row order). A rebuild takes 23-30 frames while drilling with 5 enemies.
+- Self-test readouts that run after `frame_stats` (TEST 7/8 `test_hud`) are not counted in the worst frame and can make those test builds drop frames themselves; the numbers above come from runs with a short readout.
+- Designer decision: the generator checks the enemy route (spec §7). Before it, enemies starting on the floor could reach the top band in only 30-45% of 200 levels: the band rule allows column gaps an enemy jump can't cross. Now 200/200 (the player's start platform 169/200, every platform 28/200; TEST 14). The check builds rows and links and one BFS from the floor, and runs before the player BFS. Attempts raised from 10 to 30. Designer: generation may take 2-3 s (a READY delay comes later), so the 50-frame limit is dropped. 600 levels: 0 fallbacks, at most 19 attempts, slowest 53 frames; forced failure (30 attempts, then the fallback) 119 frames.
+- Ambusher target read literally: the end of the player's platform in the player's facing direction (it goes to that end), or the landing platform when the player is airborne.
+- Hunters walk to the nearest treasure (by hops) and stand on it until pickup comes in phase 6. Treasure cells are listed at level start (`nav.tr_cell`).
+- Debug view `main.NAV_DEBUG`: HUD row shows per enemy its platform, target platform and plan digit, then the rebuild count. New test switches (all off): TEST 9-14, `LINK_LEVELS`, `LINK_HOLES`, `LINK_MAX_SPEED`, `STEP_COMB`, `nav.no_mistakes` (set by tests 10-11).
+- Phase 5a scenarios TEST 1, 2, 4 and 6 re-run: same results as before.
+- Known: enemies still bunch up (no enemy-enemy collision, same targets). The level number is still fixed at 1, so mistakes run at 15 in 64 per link choice and speed is 12.
+- Designer playtest: enemies pooled on the floor. Cause: about 30% of the platform area had no enemy route from the floor, and with no route the spec rule was to wander (on the floor: pace forever). Changes (spec §6 updated): with no route an enemy heads for the reachable platform nearest the target and waits there; enemy jump 64 -> 80 px with jump links up to 4 rows. Floor-reachable area 68% -> 77% of non-floor standing cells, every platform reachable in 57/200 levels instead of 26. Re-checked: link replay 438 links 0 failures, TEST 10 unchanged, worst frame TEST 7/8/12 227/254/246 lines with 0 dropped frames, generator 200 levels 0 fallbacks, at most 6 attempts, slowest 22 frames.
+- Code+data `$0801-$46b4`, BSS and slabs to `$63F0`. No `floats` import. 24 compiler warnings, all "always true/false" or constant `when` from switches.
 
 ## Phase 6: Treasure carrying
 **Status:** not started
