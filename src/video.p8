@@ -18,6 +18,7 @@ video {
     const ubyte PLAYER_COLOR = 14       ; art symbol '1' in player sprites
     const ubyte ENEMY_COLOR = 2
     const ubyte ENEMY_CARRY_COLOR = 7
+    const ubyte TARGET_COLOR = 1        ; fast-fall target tile highlight, must be 0-7
     ; tile colors come from assets/tiles.txt (assets.TILE_*_COLOR)
 
     ; ---- memory (spec section 3) ----
@@ -133,6 +134,18 @@ video {
         scr[41] = co
     }
 
+    sub highlight_tile(ubyte col, ubyte row) {
+        ; Recolor a drawn tile with TARGET_COLOR. draw_tile() restores its own color.
+        ubyte co = TARGET_COLOR
+        if MULTICOLOR
+            co |= 8
+        ^^ubyte @zp scr = tile_row_addr[row] + (col << 1) + COLOR_RAM - SCREEN
+        scr[0] = co
+        scr[1] = co
+        scr[40] = co
+        scr[41] = co
+    }
+
     sub draw_level() {
         ubyte row
         ubyte col
@@ -153,12 +166,27 @@ video {
 
     sub hud_digits(ubyte col, uword bcd, ubyte digits) {
         ; Print the low `digits` BCD nibbles of bcd, most significant first, starting at col.
+        ; Only digits that differ from what is on screen are written.
         ^^ubyte @zp scr = SCREEN + col + digits - 1
+        ubyte ch
         repeat digits {
-            @(scr) = '0' as ubyte + (lsb(bcd) & 15)
+            ch = '0' as ubyte + (lsb(bcd) & 15)
+            if @(scr) != ch
+                @(scr) = ch
             bcd >>= 4
             scr--
         }
+    }
+
+    sub message(ubyte row, ubyte col, str text) {
+        ; Hi-res text over the playfield (placeholder messages). draw_level() erases it.
+        ^^ubyte @zp scr = SCREEN + (row as uword) * 40 + col
+        ubyte i = 0
+        while text[i] != 0 {
+            scr[i] = text[i]
+            i++
+        }
+        sys.memset(scr + COLOR_RAM - SCREEN, i, COLOR_HUD)
     }
 
     sub draw_hud_labels() {

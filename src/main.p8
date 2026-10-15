@@ -1,8 +1,9 @@
-; C64 platformer. Phase 2: hand-made test level with the player running and jumping on it.
+; C64 platformer. Phase 3: hand-made test level with tile damage, treasures, score and timer.
 
 %import video
 %import input
 %import player
+%import score
 %zeropage basicsafe
 %memtop $C000
 
@@ -43,17 +44,10 @@ main {
 
     sub start() {
         video.init()
-        sys.memcopy(&test_level, &video.tiles, len(test_level))
-        video.draw_level()
-
-        ; placeholder HUD values (BCD)
         video.draw_hud_labels()
-        video.hud_score($000000)
-        video.hud_time($060)
         video.hud_level($01)
-
-        player.init()
-        player.draw()
+        score.new_game()
+        load_level()
         video.start_frame_irq()
 
         repeat {
@@ -63,6 +57,37 @@ main {
             player.draw()
             if DEBUG_HUD
                 debug_hud()
+            if score.treasures_left == 0
+                level_complete()
+            else if score.tick()
+                game_over()
+        }
+    }
+
+    sub load_level() {
+        sys.memcopy(&test_level, &video.tiles, len(test_level))
+        video.draw_level()
+        score.new_level()
+        player.init()
+        player.draw()
+    }
+
+    sub level_complete() {
+        ; Placeholder: show the message for 2 s (timer paused), then reload the test level with more time.
+        video.message(7, 13, sc:"level complete")
+        repeat 100 {
+            video.wait_frame()
+            input.read()
+        }
+        load_level()
+        score.add_time(score.LEVEL_TIME_BONUS)
+    }
+
+    sub game_over() {
+        ; Placeholder: freeze with the message on screen.
+        video.message(7, 15, sc:"game over")
+        repeat {
+            video.wait_frame()
         }
     }
 

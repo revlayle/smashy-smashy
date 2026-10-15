@@ -94,7 +94,7 @@ Done when:
 - Feel items for the designer: see the phase report (run speed 1.5 px/f, rise 2.5 px/f, gravity 4, max fall 4 px/f, fast-fall 6 px/f, all in `player.p8`).
 
 ## Phase 3: Platform damage, treasures, score and timer
-**Status:** not started
+**Status:** done
 **Spec:** §4 tile values, §5 landing and treasure rules, §8
 
 Build:
@@ -104,10 +104,30 @@ Build:
 - 10 treasures collected → "LEVEL COMPLETE" placeholder, then reload the same test level with +60 s.
 
 Done when:
-- [ ] Scripted test: two fast-falls on the same tile → damaged after the first, gone after the second, player drops through.
-- [ ] Scripted test: walking over a treasure adds the right points and removes it.
-- [ ] Timer screenshot after N seconds shows 60 - N.
-- [ ] Score display correct after passing 999 and 9999 (BCD carry).
+- [x] Scripted test: two fast-falls on the same tile → damaged after the first, gone after the second, player drops through.
+- [x] Scripted test: walking over a treasure adds the right points and removes it.
+- [x] Timer screenshot after N seconds shows 60 - N.
+- [x] Score display correct after passing 999 and 9999 (BCD carry).
+
+**Notes:**
+- New `src/score.p8`: BCD score (`long`, `bcd.addl`), timer as BCD seconds (`uword`) plus a 50-frame counter, and `treasures_left`. Treasure points come from a BCD table (`$0100`-`$1500`).
+- HUD: score and time are redrawn only when they change, and `video.hud_digits` writes only digits that differ from the screen.
+- Verified with scripted input (switch off again in the handed-over build):
+  - Fall onto row 5, walk right to column 13, then fire+down twice (rises 2 px, fast-falls). After the first fast-fall the tile shows damaged and the player stands on it. After the second it is gone and the player drops to row 10, damaging that tile on landing.
+  - The same walk collects treasures 6 and 7 from row 4: score 000700, then 001500 (carry past 999). Both tiles are cleared.
+  - Timer: screenshots 10 s and 30 s after start show 050 and 030.
+  - Temporary build with the start score at 9300: landing on treasure 6 shows 010000 (carry past 9999 into the third BCD byte).
+  - Temporary build with 1 treasure per level: LEVEL COMPLETE shows, then the level reloads with time 060 + 60 = 120 and the score kept.
+  - Temporary build with a 3 s timer: time reaches 000 and the game freezes with GAME OVER.
+- Placeholders: messages are hi-res text at char row 7 (`video.message`). Level complete waits 100 frames (timer paused), then reloads `main.test_level` and puts the player back at the start in `FALLING`. Game over loops forever. The level number stays 01 until phase 7.
+- Designer decisions after the first review (spec §5 updated):
+  - Destroying a tile snaps the box to the centre of the hole so the fast-fall continues. This fixes landing on the edge of the neighbouring tile when straddling two tiles.
+  - Target highlight: while airborne, the tile a fast-fall would damage is recoloured white (`video.TARGET_COLOR`, colour RAM only). Checked by script: a short jump from row 5, straddling columns 9-10, shows column 10 highlighted. A fast-fall destroys it and snaps into the hole, and the highlight moves to row 10 column 10. That tile is drilled too, treasure n is collected on the way (+1400), and the player lands on the floor centred in column 10. The highlight is removed on landing. The two-fast-fall test was re-run with the same result.
+  - The highlight costs a column scan per frame (at most 11 rows, 2 columns) and redraws only when the target changes.
+- Keyboard play in VICE: `tools/vicerc` maps the arrow keys and left Ctrl to joystick port 2 (keyset 1). `build run` loads it with `-config` and injects the PRG (`-autostartprgmode 1`). The game still reads only the joystick.
+- Tile changes are drawn immediately with `draw_tile` rather than queued (at most 2 per frame).
+- The timer starts with the frame loop and counts the first second after 50 frames.
+- Code+data `$0801-$1FEC`, BSS just after. No `floats` import. The compiler warnings are the 5 expected `const bool` ones.
 
 ## Phase 4: Level generator
 **Status:** not started

@@ -1,0 +1,11 @@
+[Version]
+ConfigVersion=3.10
+
+[C64SC]
+JoyDevice2=2
+KeySetEnable=1
+KeySet1North=65362
+KeySet1South=65364
+KeySet1West=65361
+KeySet1East=65363
+KeySet1Fire=65507

@@ -1,7 +1,8 @@
-; Player states and movement (spec section 5). Phase 2: run, jump, fall, fast-fall. No tile damage yet.
+; Player states and movement (spec section 5). Run, jump, fall, fast-fall with tile damage, treasure pickup.
 
 %import actors
 %import input
+%import score
 
 player {
     const ubyte GROUNDED = 0
@@ -22,6 +23,11 @@ player {
 
     ubyte rise_left                     ; px of jump height left
 
+    const ubyte NO_TARGET = 255
+    ubyte target_idx = NO_TARGET        ; tile map index of the highlighted fast-fall target
+    ubyte target_col
+    ubyte target_row
+
     sub init() {
         actors.x[0] = START_X
         actors.y[0] = START_Y
@@ -30,6 +36,7 @@ player {
         actors.vy[0] = 0
         actors.state[0] = FALLING
         actors.facing[0] = actors.FACE_RIGHT
+        target_idx = NO_TARGET
     }
 
     sub update() {
@@ -101,14 +108,93 @@ player {
                 d = actors.advance(actors.y_frac[0], actors.vy[0] as ubyte)
                 actors.y_frac[0] = actors.new_frac
                 if actors.move_down(0, d) {
-                    st = GROUNDED
-                    actors.vy[0] = 0
-                    actors.y_frac[0] = 0
+                    ; a fast-fall that destroys a damaged tile keeps falling through the hole
+                    if st != FASTFALL or not damage_below() {
+                        st = GROUNDED
+                        actors.vy[0] = 0
+                        actors.y_frac[0] = 0
+                    }
                 }
             }
         }
 
         actors.state[0] = st
+        collect_treasures()
+        update_target()
+    }
+
+    sub update_target() {
+        ; In the air, highlight the tile a fast-fall from here would damage: find the row where a straight drop
+        ; stops (first solid tile under either box edge), then take the tile under the box centre in that row.
+        ; Nothing is highlighted when that tile is the floor or empty (the drop would land on an edge).
+        ubyte new_idx = NO_TARGET
+        ubyte col
+        ubyte row
+        if actors.state[0] != GROUNDED {
+            ubyte left = lsb(actors.x[0] >> 4)
+            ubyte right = lsb((actors.x[0] + actors.BOX_W - 1) >> 4)
+            col = lsb((actors.x[0] + actors.BOX_W / 2) >> 4)
+            row = ((actors.y[0] + actors.BOX_H - 1) >> 4) + 1
+            while video.tiles[video.row_start[row] + left] - 1 >= 3 and video.tiles[video.row_start[row] + right] - 1 >= 3
+                row++                   ; row 11 is floor, so this stops
+            ubyte idx = video.row_start[row] + col
+            ubyte t = video.tiles[idx]
+            if t == video.T_SOLID or t == video.T_DAMAGED
+                new_idx = idx
+        }
+        if new_idx == target_idx
+            return
+        if target_idx != NO_TARGET
+            video.draw_tile(target_col, target_row)
+        target_idx = new_idx
+        target_col = col
+        target_row = row
+        if new_idx != NO_TARGET
+            video.highlight_tile(col, row)
+    }
+
+    sub damage_below() -> bool {
+        ; Fast-fall landing: damage the tile under the box centre (solid -> damaged -> gone).
+        ; Returns true when the tile was destroyed. The floor and non-solid tiles are left alone.
+        ubyte col = lsb((actors.x[0] + actors.BOX_W / 2) >> 4)
+        ubyte row = (actors.y[0] + actors.BOX_H) >> 4
+        ubyte idx = video.row_start[row] + col
+        when video.tiles[idx] {
+            video.T_SOLID -> video.tiles[idx] = video.T_DAMAGED
+            video.T_DAMAGED -> video.tiles[idx] = video.T_EMPTY
+            else -> return false
+        }
+        video.draw_tile(col, row)
+        if idx == target_idx
+            target_idx = NO_TARGET      ; the redraw removed the highlight
+        if video.tiles[idx] != video.T_EMPTY
+            return false                ; was solid, now damaged: normal landing
+        ; destroyed: centre the box over the hole so the fast-fall continues through it
+        actors.x[0] = (col as uword << 4) + (16 - actors.BOX_W) / 2
+        actors.x_frac[0] = 0
+        return true
+    }
+
+    sub collect_treasures() {
+        ; Collect every treasure tile the box overlaps (up to 2 x 2 tiles).
+        ubyte left = lsb(actors.x[0] >> 4)
+        ubyte right = lsb((actors.x[0] + actors.BOX_W - 1) >> 4)
+        ubyte top = actors.y[0] >> 4
+        ubyte bottom = (actors.y[0] + actors.BOX_H - 1) >> 4
+        check_treasure(left, top)
+        check_treasure(right, top)
+        check_treasure(left, bottom)
+        check_treasure(right, bottom)
+    }
+
+    sub check_treasure(ubyte col, ubyte row) {
+        ubyte idx = video.row_start[row] + col
+        ubyte t = video.tiles[idx]
+        if t >= video.T_TREASURE {
+            video.tiles[idx] = video.T_EMPTY
+            video.draw_tile(col, row)
+            score.collect(t - video.T_TREASURE)
+        }
     }
 
     sub draw() {
