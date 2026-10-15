@@ -229,7 +229,7 @@ Done when:
 - [ ] Platform map check on 20 generated levels: every link is valid when replayed by the physics (a test build makes one enemy walk each link in turn and checks it lands on the expected platform). Note any failures and fix the link rules.
 - [ ] Scripted test: player waits on an upper platform → a chaser on a lower band reaches the player's platform by a jump route, not by wandering.
 - [ ] Scripted test: player drills a hole that cuts a route → the map is rebuilt and enemies take the new route. No dropped frame during the rebuild (worst-frame raster measure).
-- [ ] Worst frame with 5 enemies stays under 250 raster lines; note the number.
+- [ ] Worst frame with 5 enemies stays under 260 raster lines, measured the same way as phase 5a (`main.FRAME_STATS`, from the frame IRQ line, IRQ and KERNAL scan included; 5a result 200-203). Note the number.
 - [ ] Report lists feel items for the designer: how threatening enemies feel, mistake rate, decision interval.
 
 ## Phase 6: Treasure carrying
@@ -257,7 +257,8 @@ Build:
 - States TITLE, NEW_GAME, LEVEL_START, PLAYING, LEVEL_COMPLETE, GAME_OVER.
 - Title screen (seeds RNG on fire), dissolve transition (~8 tiles/frame), player floats to start while the next level generates, timer paused during transitions.
 - No-kill bonus +2500, level counter, enemy speed and respawn scaling.
-- Pause on Run/Stop (toggle, timer frozen, "PAUSED" shown).
+- Pause on Run/Stop (toggle, timer frozen, "PAUSED" shown). Read Run/Stop (and F1 in debug builds) directly from the keyboard matrix (`$DC00`/`$DC01`) instead of through the KERNAL.
+- Stop chaining the frame IRQ to the KERNAL IRQ (`frame_irq` returns `false`). Measured KERNAL IRQ cost was 161-204 cycles per frame with no key held, more while a key is held. Replace every use of the jiffy clock (`cbm.TIME_LO`, e.g. in `FRAME_STATS` and level-generation timing) with a frame counter incremented by `frame_irq`. Keep the KERNAL ROM banked in.
 - Session high score: updated at game over, shown on title and game-over screens.
 
 Done when:
@@ -265,7 +266,8 @@ Done when:
 - [ ] Two games started at different moments get different first levels.
 - [ ] Bonus awarded only when no enemy was destroyed during the level.
 - [ ] Pause freezes the game and timer, and resumes cleanly (scripted key press via VICE `-keybuf` or a test switch).
-- [ ] A second game shows the first game's score as the high score on the title screen.
+- [ ] A second game shows the first game's score as the high score on the title screen.
+- [ ] No KERNAL calls or jiffy-clock reads remain in game code (grep for `cbm.`), and `FRAME_STATS` still measures correctly with the new frame counter. Note the worst frame before and after dropping the KERNAL IRQ.
 
 ## Phase 8: Art, animation and sound
 **Status:** not started
