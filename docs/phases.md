@@ -165,14 +165,14 @@ Done when:
 - The RNG is seeded at startup from the CIA1 timer and raster line (placeholder until the title screen). Each VICE start can give a different first level.
 - Generator buffers are normal arrays in program RAM (about 1.1 KB of BSS), not the `$C400` game RAM area. Code+data `$0801-$2917`, BSS to `$2DD9`. No `floats` import. The compiler prints 8 "condition is always true/false" warnings, all from `const bool` switches.
 
-## Phase 5: Enemies
+## Phase 5a: Enemies with simple AI
 **Status:** not started
-**Spec:** §4 actors, §5 hit and float, §6 (except treasure carrying)
+**Spec:** §4 actors, §5 hit and float, §6 (contact, movement, simple AI, respawn; not navigation AI or treasure handling)
 
 Build:
-- `src/enemies.p8`: 5 enemies on sprites 1-5, shared physics, 64 px jump, AI from §6 (decisions every 8 frames), speed scaling by level.
+- `src/enemies.p8`: 5 enemies on sprites 1-5, shared physics, 64 px jump, the **simple AI** from §6 (decisions every 8 frames, staggered), speed scaling by level. Keep the AI behind a small interface (e.g. `ai_decide(i)` setting a walk direction and a jump request) so phase 5b can replace it without touching movement or contact code.
 - Contact rules in order: kill (fast-fall), stomp (bounce 24 px), hit.
-- Kill: launch 32 px, chain scoring `200 << chain`, chain reset on landing, respawn timer and placement rules.
+- Kill: launch 32 px, chain scoring 2, 4, 8, 16, 32 hundred (spec §8), chain reset on landing, respawn timer and placement rules.
 - Hit: -10 s, straight-line FLOATING to start at 4 px/f, 2 s invulnerability with flicker.
 
 Done when:
@@ -180,20 +180,41 @@ Done when:
 - [ ] Scripted test: fast-fall onto an enemy → enemy gone, +200, player launched.
 - [ ] Scripted test: normal fall onto an enemy → bounce, enemy survives, no points.
 - [ ] Scripted test: walking into an enemy → time -10, player floats back, then flickers.
-- [ ] Frame budget holds with 5 enemies: no slowdown (measure with border color timing; note the result).
+- [ ] Frame budget holds with 5 enemies: no slowdown. Measure the worst frame in raster lines (read the raster line at the start and end of the frame update, keep the maximum, show it on the HUD in a test build) and note it. The pre-phase-5 baseline was 58 lines.
+
+## Phase 5b: Navigation AI
+**Status:** not started
+**Spec:** §6 navigation AI (not the carrier role; that is phase 6)
+
+Build:
+- `src/nav.p8`: platform map (`platform_of`, links, `next_link`, `hops`), built after level generation. Time-sliced rebuild into a second table set when a tile is destroyed, then swapped in.
+- Replace the simple AI with the navigation AI: route following, take-off and jump execution with the 60-frame timeout, wandering when there's no route, level-scaled mistakes.
+- Roles by slot: chasers, ambusher, hunters.
+- Debug view (behind a `const bool` switch): show each enemy's current platform and target platform as hex on the HUD row, or recolour the target platform's tiles.
+
+Done when:
+- [ ] Platform map check on 20 generated levels: every link is valid when replayed by the physics (a test build makes one enemy walk each link in turn and checks it lands on the expected platform). Note any failures and fix the link rules.
+- [ ] Scripted test: player waits on an upper platform → a chaser on a lower band reaches the player's platform by a jump route, not by wandering.
+- [ ] Scripted test: player drills a hole that cuts a route → the map is rebuilt and enemies take the new route. No dropped frame during the rebuild (worst-frame raster measure).
+- [ ] Worst frame with 5 enemies stays under 250 raster lines; note the number.
+- [ ] Report lists feel items for the designer: how threatening enemies feel, mistake rate, decision interval.
 
 ## Phase 6: Treasure carrying
 **Status:** not started
-**Spec:** §6 treasure handling
+**Spec:** §6 treasure handling and carrier role
 
 Build:
 - Enemy pickup (color change), drop on stomp or kill, dropped treasure falls one tile every 4 frames until it rests.
+- Carrier role: hideout choice by `hops`, re-plan rules, never routes onto the player's platform, tiring after 20 s, return to slot role after losing the treasure.
 - Level completion still counts only treasures the player collects.
 
 Done when:
 - [ ] Screenshot: an enemy that walked over a treasure has the carry color and the treasure tile is gone.
 - [ ] Scripted test: stomp a carrier → treasure reappears and settles on a platform.
 - [ ] A treasure dropped where the cell is occupied lands in the nearest free cell above.
+- [ ] Scripted test: player approaches a carrier → the carrier moves away (its `hops` from the player's platform goes up, or it leaves the player's platform).
+- [ ] Tiring: a carrier holding a treasure for 20 s moves at 75% speed (debug readout).
+- [ ] Report lists feel items for the designer: is a carrier catchable, how long a chase takes, is tiring needed.
 
 ## Phase 7: Game flow and difficulty
 **Status:** not started

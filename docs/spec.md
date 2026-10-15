@@ -139,14 +139,52 @@ Max speed stays under 16 px/f, so collision never tunnels through a tile.
 - Same physics routine as the player, minus fast-fall.
 - Speed per level: `enemy_speed = min(12 + (level - 1), 22)` subpx/f, i.e. 50% of the player at level 1, reaching the 91.7% cap (the closest step under 95%) at level 11. **[TUNE]**
 - Jump: constant rise at the player's rise speed, max 64 px (4 tiles), so an enemy reliably climbs a step of up to 3 tiles. That covers the normal 3-tile gap between platform bands.
+- Enemies pass through each other (no enemy-enemy collision).
 
-### AI (decisions at most every 8 frames per enemy) [TUNE]
+### Simple AI (phase 5a; replaced by the navigation AI in phase 5b)
+Decisions at most every 8 frames per enemy, staggered so at most one enemy decides per frame. **[TUNE]**
 1. Not carrying, and a treasure on the same tile row within 5 tiles with nothing solid in between → walk to it.
 2. Else chase the player:
    - Player on the same row → walk toward the player.
    - Player lower → walk toward the player and deliberately walk off edges.
    - Player higher → if a solid tile 1-3 tiles up is reachable within 2 columns ahead, jump; otherwise walk toward the nearest platform end and wander.
 3. A wall ahead → turn around, or jump if the step is ≤ 3 tiles.
+
+### Navigation AI (phase 5b)
+
+**Frame budget (measured before phase 5):** the worst frame of the current game (player, tile redraws, HUD) uses 58 of 312 raster lines. Enemy movement reuses the player physics, about 10-20 lines per enemy. AI decisions must stay table lookups; anything heavier is time-sliced across frames.
+
+**Platform map.** Built after level generation, kept in program RAM (BSS):
+- A **platform** is a maximal horizontal run of standing cells (empty cell above solid/damaged/floor) on one row. Max 32 platforms; extras are ignored (treated as unreachable). `platform_of[240]` maps each cell to its platform (255 = none).
+- **Links** from platform P, each storing the take-off column, the direction and the target platform:
+  - *Walk off*: from the cell just past P's left or right end, if empty, falling straight down to the first standing cell.
+  - *Jump up*: to a platform Q 1-3 rows higher. Take-off column is the column just past Q's left or right end, which must lie on P, with clear cells from P's row up to Q's row. The enemy rises in that column, then moves 1 column sideways onto Q. Conservative on purpose: it never includes a jump an enemy can't make.
+- `next_link[P * 32 + Q]`: the first link to take from P to reach Q (255 = no route). `hops[P * 32 + Q]`: route length in links (255 = no route). Both from one BFS per platform over the link graph. 2 KB total.
+- **Rebuild** when a tile is destroyed. The rebuild is time-sliced (a few platforms per frame) into a second copy of the tables, then swapped in. Enemies use the old tables until then. A rebuild must never cause a dropped frame.
+
+**Targets.** The player's platform is the one under the player's box. If the player is airborne, it is the first standing cell found by scanning straight down from the box centre.
+
+**Decision** (every 8 frames per enemy, staggered):
+- Same platform as the target → walk toward the target's x.
+- Different platform → look up `next_link`. Walk to its take-off column, then walk off or jump. A jump that doesn't land on the expected platform within 60 frames → re-decide.
+- No route → wander on the platform; 1 in 4 decisions walk off an edge, if one has a walk-off link.
+- Mistakes: with probability `max(16 - level, 4)` in 64, take a random link instead of the planned one. **[TUNE]**
+
+**Roles.** Assigned by enemy slot at spawn and respawn:
+
+| Slots | Role | Target |
+|---|---|---|
+| 1, 2 | Chaser | the player's platform |
+| 3 | Ambusher | the platform the player is heading toward: the end of the player's platform in the player's facing direction, or the landing platform when airborne |
+| 4, 5 | Hunter | the nearest platform with a free treasure (by `hops`), else the player's platform |
+
+**Carrier.** An enemy holding a treasure switches to the carrier role, whatever its slot:
+- Target is the **hideout**: the platform with the largest `hops` from the player's platform, reachable from the carrier's current platform. Ties go to platforms with more than one outgoing link (avoids dead ends).
+- Re-plan when the player is within 5 tiles (Manhattan) or on the carrier's platform, and every 32 frames otherwise.
+- A carrier never moves toward the player on purpose. If its next link would bring it onto the player's platform, it picks the next-best hideout.
+- **Tiring:** after holding a treasure for 20 s, the carrier moves at 75% of its normal speed until it loses the treasure. **[TUNE]** (Default chosen by Claude; designer may remove.)
+- **Contact:** touching a carrier from the side hits the player like any enemy. The treasure only comes loose by a stomp or a fast-fall kill.
+- When it loses the treasure, the enemy returns to its slot's role.
 
 ### Treasure handling
 - Not carrying and the box overlaps a treasure tile → pick it up (tile cleared, `carrying = 1 + type`). Shown by a color change: a carrying enemy uses `ENEMY_CARRY_COLOR` instead of `ENEMY_COLOR` (sprite color register $D027+n). No extra frames.
@@ -267,7 +305,8 @@ src/video.p8       VIC bank setup, IRQ, tile drawing, HUD, sprite register write
 src/input.p8       joystick read and edge detection
 src/actors.p8      shared physics and tile collision
 src/player.p8      player states
-src/enemies.p8     enemy AI, respawn, treasure carry/drop
+src/enemies.p8     enemy movement, contact, respawn, treasure carry/drop
+src/nav.p8         platform map and navigation AI
 src/levelgen.p8    generation and validation
 src/score.p8       BCD score, timer
 src/gen_assets.p8  GENERATED by tools/gfx.py: art name constants, tile colors
@@ -283,8 +322,9 @@ Each milestone ends with something playable in VICE. **The detailed plan, with s
 2. **Player physics:** run, variable jump, fall, fast-fall, landing on tiles, head bumps.
 3. **Platform damage and treasures:** damage/destroy tiles, collect treasures, score, timer, level-complete check.
 4. **Level generator:** bands, treasures, validation. Press a key to regenerate (debug).
-5. **Enemies:** movement and AI, stomp, kill, chains, hits, float back, invulnerability.
-6. **Treasure carrying:** pickup, drop, falling treasure.
+5a. **Enemies:** movement, simple AI, stomp, kill, chains, hits, float back, invulnerability.
+5b. **Navigation AI:** platform map, route following, enemy roles.
+6. **Treasure carrying:** pickup, drop, falling treasure, carrier fleeing.
 7. **Game flow:** title, dissolve transition, difficulty scaling, respawn, game over.
 8. **Art and polish:** real sprites and chars, animations, basic sound effects.
 
@@ -297,6 +337,8 @@ None at the moment.
 - Stomp (landing on an enemy without fast-fall): 24 px bounce, no score, enemy survives, carried treasure drops.
 - Air control: full, at run speed, except during fast-fall, which drops straight down.
 - Timer runs during the post-hit float; the float is fast (4 px/f, < 1 s worst case).
+- Enemy AI: platform-map navigation with roles (chasers, ambusher, hunters), built in two phases (5a simple, 5b navigation).
+- Carriers flee to a hideout far from the player. Side contact with a carrier hits the player; only a stomp or kill frees the treasure. Tiring after 20 s is a Claude default, open to removal.
 - Drilling: destroying a damaged tile with a fast-fall keeps the player fast-falling through the hole.
 - Graphics: multicolor first, kept switchable to hi-res via one constant.
 - Treasure types: `min(14, (level - 1) + randrange(5))`.
