@@ -132,7 +132,7 @@ Max speed stays under 16 px/f, so collision never tunnels through a tile.
 
 ### Contact with the player (checked in this order)
 1. Player in `FASTFALL`, player's bottom edge in the top half of the enemy box → **kill**: enemy destroyed, any carried treasure dropped, score 2, 4, 8, 16, 32 hundred by chain (§8), `chain += 1` (max 4), player → `LAUNCHED` 32 px.
-2. Player falling (vy > 0, not fast-fall) with the same geometry → **stomp**: carried treasure dropped, player bounces 24 px. Enemy survives. No score.
+2. Player falling (vy > 0, not fast-fall) with the same geometry → **stomp** ("bonk"). Any downward fall counts: the descent of a jump, walking off a ledge, or coming down from a bounce or launch: carried treasure dropped, player bounces 24 px. Enemy survives. No score.
 3. Otherwise → player is hit (unless invulnerable or floating).
 
 ### Movement
