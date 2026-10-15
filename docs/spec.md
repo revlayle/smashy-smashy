@@ -10,7 +10,7 @@ Items marked **[DECIDE]** are proposals waiting for the designer's confirmation.
 ## 1. Platform and timing
 
 - Target: PAL C64, 50 frames/s, Prog8 `-target c64`, 64tass. NTSC is not a goal (timer and speeds would run 20% fast).
-- One game update per frame. Frame sync: a raster IRQ at line 251 (bottom border) copies the sprite shadow registers to the VIC and sets a `frame_ready` flag; the main loop waits on it.
+- One game update per frame. Frame sync: a raster IRQ at line 251 (bottom border) copies the sprite shadow registers and the vertical fine scroll to the VIC, counts frames (`video.frames`, replaces the KERNAL jiffy clock) and sets a `frame_ready` flag; the main loop waits on it. It does not chain to the KERNAL IRQ (phase 7).
 - Per-frame order: wait for frame → write sprite registers from state computed last frame → read joystick → update player → update enemies → resolve collisions → apply queued tile changes to screen → update HUD (only changed digits) → platform-map rebuild slices in the time left (§6).
 - Frame budget is roughly 18,000 CPU cycles. If it overruns, enemy AI decisions (not movement) run on alternating frames, e.g. enemies 1,3,5 on even frames and 2,4 on odd.
 - 1 second = 50 frames. All timers count frames or seconds as integers.
@@ -58,7 +58,7 @@ Notes:
 - The VIC sees RAM at `$E000-$FFFF` even with KERNAL ROM banked in, and CPU *writes* there always go to RAM. So the charset and sprites are copied there once at startup with no ROM banking. They are included in the program with `%asmbinary` and copied from there.
 - Register setup: `$DD00` bits 0-1 = `%00` (bank 3), `$D018 = $08` (screen at +$0000, charset at +$2000), `$0288 = $C0` (KERNAL screen editor page, only matters if KERNAL text output is used).
 - **Prog8's `txt.setchr`/`txt.plot`-based routines are hard-wired to `$0400`** and must not be used after the switch. The game draws tiles and HUD through its own pointer routines (`^^ubyte @zp` into `$C000` and color RAM `$D800`).
-- KERNAL stays banked in and its IRQ keeps running (keyboard scan, harmless). The frame IRQ chains to it.
+- KERNAL ROM stays banked in, but its IRQ routine no longer runs (phase 7): the frame IRQ returns without chaining to it. The game reads Run/Stop and F1 from the keyboard matrix itself (`input.p8`: row 7 bit 7, row 0 bit 4). No KERNAL calls remain in game code.
 
 ## 4. Data structures
 
@@ -122,6 +122,7 @@ Max speed stays under 16 px/f, so collision never tunnels through a tile.
 - **Target highlight:** while in the air (any state but `GROUNDED`), the tile a fast-fall from the current position would damage is drawn in `TARGET_COLOR` (white). It is found by dropping the box straight down: the landing row is the first row with a solid tile under either box edge, and the target is the tile under the box centre in that row. Nothing is highlighted when that tile is the floor or empty (the drop would land on an edge, no damage). The highlight follows the player and moves down as tiles are drilled.
 - **Landing in any state:** chain = 0.
 - **Floor (3)** takes no damage.
+- **Screen shake** (designer request, phase 7): a fast-fall that cracks a tile shakes the screen for 4 frames; destroying a tile or killing an enemy shakes it for 8. The vertical fine scroll drops 2 px on alternate frames, and sprites move with it. A new shake restarts the timer if longer than what is left. Visual only. **[TUNE]**
 - **Treasure:** box overlaps a treasure tile → collect: score, clear the tile, `treasures_left -= 1`.
 
 ### Hit and float
@@ -163,6 +164,8 @@ Decisions at most every 8 frames per enemy, staggered so at most one enemy decid
 **Measured after phase 5b** (same method): worst frame 202 lines with 5 live enemies (TEST 7 and 8), 247-253 lines with 5 live enemies while the player drills and the map is rebuilt; 0 dropped frames.
 
 **Measured after phase 6** (same method, now with treasures on the map): 255-261 lines with 5 live enemies, pickups and carriers; 241 with 5 carriers; 261 while drilling with rebuilds; 0 dropped frames.
+
+**Measured after phase 7** (same method, frame counter instead of the jiffy clock): TEST 7/8/12/20 257/254/260/246 lines without the KERNAL IRQ, 260/257/263/250 with it chained; 0 dropped frames.
 
 **Platform map.** Built after level generation, kept in program RAM (BSS and `memory()` slabs, about 6 KB for both table sets):
 - A **platform** is a maximal horizontal run of standing cells (a non-solid cell, empty or treasure, above solid/damaged/floor) on one row. Max 32 platforms; extras are ignored (treated as unreachable). `platform_of[220]` maps each cell to its platform (255 = none). Ids are given in row order, top to bottom.
@@ -233,10 +236,10 @@ Grid is 20 x 12. Row 11 = floor. The spawn zone (columns 8-11, rows 0-1) is kept
 5 enemies on random standing cells ≥ 8 tiles from the player start, at least 3 tiles apart (`|dcol| >= 3` or `|drow| >= 3`, as for treasures). Same picking rule as a respawn (20 random tries, then the farthest valid cell). They start with the 1 s warning flicker (§6).
 
 ### RNG
-`math.rnd()`, masked and retried for ranges (`levelgen.rand_below`; `math.randrange()` does a 16-bit multiply and is several times slower). Seeded once with `math.rndseed()` from the CIA1 timer and raster line at the moment fire is pressed on the title screen. Until the title screen exists (phase 7), it is seeded at startup.
+`math.rnd()`, masked and retried for ranges (`levelgen.rand_below`; `math.randrange()` does a 16-bit multiply and is several times slower). Seeded with `math.rndseed()` from the CIA1 timer and raster line at the moment fire is pressed on the title screen, so every game is seeded anew.
 
 ### Time
-A level start can take 2-3 seconds (designer decision, phase 5b); the 3 s "READY?" pause (§9) covers it. It must not take much longer. Measured on 200 levels with the 80 px enemy jump: 0 fallbacks, at most 6 attempts, slowest 22 frames. Worst case (30 failed attempts, then the fallback) 119 frames (2.4 s).
+A level start can take 2-3 seconds (designer decision, phase 5b); the 3 s "READY?" pause (§9) covers it. It must not take much longer. Measured on 200 levels with the 80 px enemy jump: 0 fallbacks, at most 6 attempts, slowest 22 frames. Worst case (30 failed attempts, then the fallback) 119 frames (2.4 s) on the phase 5b seed; 163 frames on another seed in phase 7 (`FORCE_FAIL` lets every attempt pass all checks, so this is a pessimistic bound), 172 frames (3.4 s) including drawing and enemy placement.
 
 ## 8. Scoring and timer
 
@@ -262,16 +265,20 @@ PLAYING --time 0--> GAME_OVER --fire--> TITLE
     - **Drop shadow:** every letter block casts a shadow block 1 char right and 1 char down, in a fixed dark colour (dark grey, 11). Draw shadows first, letters on top, so a shadow only shows where there's no letter block. Each title line becomes 6 rows tall and 1 column wider (rows ~3-8 and ~10-15). Shadows don't take part in the colour sweep. **[TUNE]** colour and offset.
   - **Character mode:** the title screen uses standard (hi-res) character mode ($D016 bit 4 off) so title blocks can use all 16 colours. Multicolour mode limits single-colour cells to colours 0-7. Gameplay switches multicolour back on.
   - **Smash-in intro:** when the title screen opens, the 12 letters drop in from above the screen one after another (about 4 frames apart), falling at about 1 char row per frame. A letter's shadow falls and lands with it. Each landing shakes the screen for about 8 frames: alternate the vertical fine scroll ($D011 bits 0-2) between its normal value and 2 px lower. **[TUNE]**
+    - Implementation (phase 7): the bottom line drops first, so a falling letter never passes through a landed one. Each frame a falling letter moves down one row in a single assembly pass (cells it leaves are cleared, the rest drawn at the new position). The title does its drawing from raster line 180, just below the letters, so it is done before the beam returns to them (worst frame 193 lines from line 180); the frame IRQ writes the fine scroll in the border.
   - **Rainbow sweep:** after the intro, title block colours cycle every 2 frames through a 16-entry colour table (e.g. 9, 2, 8, 10, 15, 7, 1, 1, 7, 15, 10, 8, 2, 9, 6, 6). Each block's index is `(column + row + phase) & 15`, so the colour bands roll diagonally. Only colour RAM changes, and only for letter blocks: keep a list of their screen offsets (about 130 cells) built when the title is drawn, so shadows and empty cells are never touched. **[TUNE]**
   - **Text:** "PRESS FIRE" (blinking about once per second) and "HIGH SCORE 000000", hi-res text from the HUD font (chars 0-63 are the ROM screen codes). Fire starts a new game (edge-triggered, so the fire press that ended the last game doesn't start one).
 - **Pause**: Run/Stop toggles pause during PLAYING (edge-triggered, press again to resume). Everything freezes, including the timer; "PAUSED" is shown. Ignored during transitions.
 - **LEVEL_COMPLETE**: enemies vanish. Non-floor tiles are erased in random order, ~8 tiles per frame (about 1 s). The player floats to the start.
+  - Implementation (phase 7): all 220 non-floor cells in a random order (shuffled as it goes), 8 per frame, so the dissolve takes 28 frames (0.55 s); the state ends when the float has arrived too. The no-kill bonus is added as the dissolve starts.
 - **LEVEL_START** ("READY?" pause), used for every level including the first:
   1. "READY?" appears, hi-res text centred on the playfield. The player sprite stays at the start point (floating pose), with no control. Timer paused.
   2. Generate the next level. Blocking is fine here: nothing animates except the frame IRQ. Then draw it, so the player can see the new layout during the rest of the pause. Place enemies (not yet active).
   3. The pause lasts 3 s from when READY? appeared, or until generation and drawing finish if that takes longer (worst case measured 2.4 s, so normally exactly 3 s). **[TUNE]**
   4. Remove the text. The player switches to `FALLING`, enemies start their 1 s warning flicker, the timer runs: PLAYING.
+  - Implementation (phase 7): enemy sprites stay hidden during the pause and appear with the warning flicker when play starts. Joystick and keys are not read during the pause.
 - **GAME_OVER**: show the final score and level reached; fire → TITLE.
+  - Implementation (phase 7): "GAME OVER" and "HIGH SCORE" over the frozen playfield; score and level stay on the HUD row. Fire is accepted after 1 s, so a fire press from play doesn't skip the screen.
 - **Session high score**: the best score since the program started, kept in RAM (lost on power-off). Updated at game over, shown on the title and game-over screens. A saved high-score list is backlog (see §14).
 
 ## 10. Assets
@@ -329,6 +336,7 @@ All art lives in plain text files that can be edited in any text editor. A conve
 
 ```
 src/main.p8        entry, state machine, frame loop
+src/title.p8       title screen (block letters, intro, colour sweep)
 src/video.p8       VIC bank setup, IRQ, tile drawing, HUD, sprite register writes
 src/input.p8       joystick read and edge detection
 src/actors.p8      shared physics and tile collision

@@ -49,6 +49,7 @@ enemies {
     ubyte speed                         ; walk speed this level
     ubyte respawn_secs                  ; respawn delay this level
     ubyte frame
+    ubyte kills                         ; enemies destroyed this level (no-kill bonus)
 
     ubyte[actors.COUNT] walk_dir
     bool[actors.COUNT] goal_on          ; walk toward goal_x (never past it) instead of in walk_dir
@@ -82,6 +83,7 @@ enemies {
 
     sub new_level(ubyte lvl) {
         level = lvl
+        kills = 0
         ; speed = min(12 + (level - 1), 22), respawn = max(10 - (level - 1), 3) s
         speed = MAX_SPEED
         if level <= MAX_SPEED - BASE_SPEED
@@ -507,6 +509,7 @@ enemies {
 
     sub kill(ubyte i) {
         n_kills++
+        kills++
         drop(i)
         actors.state[i] = DEAD
         respawn_timer[i] = respawn_secs
@@ -515,6 +518,7 @@ enemies {
         if player.chain < len(kill_points) - 1
             player.chain++
         player.launch_from_kill()
+        video.shake(video.SHAKE_SMASH)
     }
 
     sub draw() {

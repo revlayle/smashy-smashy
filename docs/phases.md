@@ -292,26 +292,54 @@ Done when:
 - Code+data `$0801-$4D8D`, BSS and slabs to `$6B18`. No `floats` import. 30 compiler warnings, all "always true/false", constant `when` or a zero-iteration loop from switches.
 
 ## Phase 7: Game flow and difficulty
-**Status:** not started
+**Status:** done
 **Spec:** §8 bonus, §9
 
 Build:
 - States TITLE, NEW_GAME, LEVEL_START, PLAYING, LEVEL_COMPLETE, GAME_OVER.
 - Title screen (spec §9): big block-letter SMASHY SMASHY with a drop shadow, in hi-res character mode, smash-in intro with screen shake, rainbow colour sweep, blinking PRESS FIRE, session high score. Seeds the RNG on fire. dissolve transition (~8 tiles/frame), player floats to start, then the 3 s "READY?" pause during which the next level is generated and drawn (spec §9). Timer paused during all of it. READY? also runs before the first level.
 - No-kill bonus +2500, level counter, enemy speed and respawn scaling.
-- Pause on Run/Stop (toggle, timer frozen, "PAUSED" shown). Read Run/Stop (and F1 in debug builds) directly from the keyboard matrix (`$DC00`/`$DC01`) instead of through the KERNAL.
+- Pause on Run/Stop (toggle, timer frozen, "PAUSED" shown). Read Run/Stop (and F1 in debug builds) directly from the keyboard matrix (`$DC00`/`$DC01`) instead of through the KERNAL.
 - Stop chaining the frame IRQ to the KERNAL IRQ (`frame_irq` returns `false`). Measured KERNAL IRQ cost was 161-204 cycles per frame with no key held, more while a key is held. Replace every use of the jiffy clock (`cbm.TIME_LO`, e.g. in `FRAME_STATS` and level-generation timing) with a frame counter incremented by `frame_irq`. Keep the KERNAL ROM banked in.
 - Session high score: updated at game over, shown on title and game-over screens.
 
 Done when:
-- [ ] Full loop works: title → play → complete level → next level → time runs out → game over → title.
-- [ ] READY? shows for 3 s before every level (first level too), the new level is visible during it, the timer doesn't change during it, and play starts with the enemies' warning flicker. A forced generator fallback (worst case) still starts play within about 3 s.
-- [ ] Two games started at different moments get different first levels.
-- [ ] Title screen screenshots: mid-intro (some letters still falling), after the intro (all 12 letters with shadows down-right in dark grey, sweep colours differ between two screenshots taken 0.5 s apart, shadow colour unchanged). Gameplay after it is back in multicolour mode with correct tile colours.
-- [ ] Bonus awarded only when no enemy was destroyed during the level.
-- [ ] Pause freezes the game and timer, and resumes cleanly (scripted key press via VICE `-keybuf` or a test switch).
-- [ ] A second game shows the first game's score as the high score on the title screen.
-- [ ] No KERNAL calls or jiffy-clock reads remain in game code (grep for `cbm.`), and `FRAME_STATS` still measures correctly with the new frame counter. Note the worst frame before and after dropping the KERNAL IRQ.
+- [x] Full loop works: title → play → complete level → next level → time runs out → game over → title.
+- [x] READY? shows for 3 s before every level (first level too), the new level is visible during it, the timer doesn't change during it, and play starts with the enemies' warning flicker. A forced generator fallback (worst case) still starts play within about 3 s.
+- [x] Two games started at different moments get different first levels.
+- [x] Title screen screenshots: mid-intro (some letters still falling), after the intro (all 12 letters with shadows down-right in dark grey, sweep colours differ between two screenshots taken 0.5 s apart, shadow colour unchanged). Gameplay after it is back in multicolour mode with correct tile colours.
+- [x] Bonus awarded only when no enemy was destroyed during the level.
+- [x] Pause freezes the game and timer, and resumes cleanly (scripted key press via VICE `-keybuf` or a test switch).
+- [x] A second game shows the first game's score as the high score on the title screen.
+- [x] No KERNAL calls or jiffy-clock reads remain in game code (grep for `cbm.`), and `FRAME_STATS` still measures correctly with the new frame counter. Note the worst frame before and after dropping the KERNAL IRQ.
+
+**Notes:**
+- New `src/title.p8` (title screen). `main.p8` runs the states as a sequence: `title.run()` → `new_game()` → (`level_start()` → `play()` → `level_complete()`) until `play()` reports the time ran out → `game_over()` → title. `score.p8` now holds the level number (binary and BCD) and the session high score.
+- Frame IRQ: no KERNAL chaining (`return false`). It counts frames in `video.frames` (all jiffy-clock reads replaced) and writes the vertical fine scroll from `video.scroll_y` (title shake). `grep cbm.` finds only the `cbm.HIBASE = $C0` store in `video.init()`: a plain memory write from the spec §3 register setup, not a KERNAL call. The KERNAL ROM stays banked in.
+- Keys: `input.read()` scans the keyboard matrix for Run/Stop (row 7 bit 7) and F1 (row 0 bit 4) after the joystick, then sets `$DC00` back to `$FF`. They are bits `input.STOP` and `input.F1` next to the joystick bits, with the same edge detection, so scripted tests can press them. F1 (`REGEN_KEY`) is still on for the designer; phase 8 removes it.
+- Title (all [TUNE] constants at the top of `title.p8`):
+  - Letter shapes are strings like `"### #.. ### ..# ###"` (rows separated by spaces), parsed at startup. Line 1 at columns 4-29, rows 3-8; line 2 at columns 11-36, rows 10-15 (with shadows). PRESS FIRE row 19, HIGH SCORE row 22. Solid block = char 255, written by `video.init()`.
+  - The bottom line drops first (spec allowed any order): then a falling letter never passes through a letter that has already landed.
+  - The first version (Prog8 erase + redraw per letter) took over 255 raster lines per intro frame, so frames dropped and screenshots caught a letter's shadow without its letter. Now a falling letter moves down one row in one assembly pass (`move_rows`) that clears only the cells it leaves, and the title starts its frame work at raster line 180, just below the letters, with the top line's letters first. Worst intro frame 193 lines from line 180 (the beam is back at the top letters after 183, at line 2 after 263). Dense screenshots of the intro show no half-drawn letters.
+  - Sweep: every 2 frames, colour RAM of the ~130 letter blocks from a list built at startup. With the spec formula `(column + row + phase) & 15` and 1-char blocks the colour bands are one cell wide, so the letters look speckled rather than striped. Worth a look ([TUNE]).
+  - PRESS FIRE blinks 25 frames on, 25 off (colour RAM switched to the background colour). Fire during the intro starts the game too.
+- READY? (`level_start()`): the player is held at the start in the float pose, READY? is shown, the level is generated, drawn and the enemies placed (sprites hidden), READY? is drawn again, then it waits until 150 frames have passed since it first appeared. `video.restore_tiles()` redraws the tiles under the text. Then `player.init()` (FALLING), and the enemies' 1 s warning flicker starts with play. Joystick and keys are not read during it.
+- Pause: Run/Stop shows PAUSED at the playfield centre, freezes everything (sprites, timer, enemy timers) and keeps reading input until Run/Stop is pressed again. The fast-fall target highlight is re-applied after the text is removed. Pause is only read in `play()`, so it is ignored in transitions.
+- Level complete: enemy sprites hidden; no-kill bonus (+2500) added if `enemies.kills` (new, per level) is 0; the player floats to the start (`player.start_float()`, split out of `hit()`, no time penalty); the 220 non-floor cells are cleared in a random order, 8 per frame (Fisher-Yates done incrementally, so no up-front cost): 28 frames (0.55 s). The spec's "about 1 s" doesn't match 8 per frame; I kept the 8 ([TUNE] `DISSOLVE_RATE`). Then level + 1 and +60 s, and READY?.
+- Game over: "GAME OVER" and "HIGH SCORE xxxxxx" over the frozen playfield (final score and level stay on the HUD). Fire only counts after 1 s (`GAME_OVER_WAIT`), so fire held or pressed at the moment the time runs out doesn't skip it.
+- Difficulty: `levelgen.generate(score.level)` (treasure types) and `enemies.new_level(score.level)` (speed, respawn time; the mistake rate reads `enemies.level`). Level 2 in the flow test shows the higher treasure types.
+- Found while testing: the title's falling letters pass through char row 0 and left multicolour values in its colour RAM, so the HUD showed garbled digits. `video.set_game_mode()` now resets all colour RAM.
+- Verified with scripted input (all switches off again in the handed-over build). New switches: `main.TEST = 22` (game flow, runs the title; all other tests skip it), `main.COMPLETE_AT` (any test: force level complete after N play frames), `levelgen.FRAME_SEED` (seed from the frame counter only, so separate VICE runs see the same levels; without it start-time jitter gives each run a different seed). TEST 22 readout on char row 1: READY? length, generation time, kills, enemy states, play frames, score.
+  - Full loop (TEST 22): title → fire → READY? (150 frames, $96) → play → Run/Stop at play frame 41 → PAUSED; time stays 060 and the play-frame count stays $2C over 2 s of screenshots → Run/Stop → play resumes (time 059) → forced completion at play frame 100 → dissolve, score 002500 (no kills), time frozen at 059 → READY? level 02, time 119, unchanged across 3 screenshots → play → time set to 3 s → 000 → GAME OVER with HIGH SCORE 002500 → fire → title shows HIGH SCORE 002500 → fire → game 2 with a different first level.
+  - Enemies are in state 7 (warning) at the start of play (readout `E77777` at play frame 7), hidden during READY?.
+  - Forced generator fallback (TEST 22 + `FORCE_FAIL`): generation 163 frames (`GEN_STATS`), READY? 172 frames (3.44 s): play starts as soon as generation, drawing and placement finish. The phase 5b figure of 119 frames came from another seed; FORCE_FAIL lets every attempt pass all checks, so this is a pessimistic bound. Normal generation is far below 150 frames (16-18 frames seen here), so READY? is then exactly 3 s.
+  - Different first levels: real seeding, fire on title frame 120 vs 160 → different layouts. Game 2 in TEST 22 also differs from game 1.
+  - Title screenshots: mid-intro (letters falling, shadows with them), after the intro (12 letters, dark grey shadows down-right). Two shots 0.5 s apart: 7554 pixels differ, all dark grey shadow pixels identical. Gameplay after the title is in multicolour mode with the usual tile colours.
+  - Bonus: TEST 2 (two fast-fall kills, 600 points) + `COMPLETE_AT = 300` → still 000600 at the next READY?. TEST 3 (bonks only) + the same → 002500.
+  - Frame budget (`FRAME_STATS`, frame counter): TEST 7/8/12/20 = 257/254/260/246 lines without the KERNAL IRQ, 260/257/263/250 with it chained (temporary build), 0 dropped frames. The KERNAL IRQ cost about 3-4 lines per frame. TEST 7 and 8 must be read before about 24 M cycles: their 30 s stress script outlasts the 60 s timer with hits, and a later FIRE in the script starts a new game.
+- Designer request after playing: a small screen shake on smashes (spec §5 updated). Fast-fall cracking a tile shakes 4 frames, destroying a tile or killing an enemy 8 frames; a new shake restarts the timer if it is longer than what is left (no stacking). The screen drops 2 px on alternate frames (`video.shake()`, `shake_step()` once per play frame; constants `SHAKE_*` in `video.p8`). The frame IRQ adds the same offset to every sprite's y, so sprites stay on their platforms. Stopped on pause, level complete and game over. Checked by script: after the TEST 2 kill the HUD sits 2 px lower on alternate frames for 8 frames, with the enemy still on its platform; TEST 12 (drilling) worst frame 261 lines, 0 dropped.
+- Not self-verified: Run/Stop and F1 from the real keyboard (the scripted tests press them through the script; VICE `-keybuf` feeds the KERNAL buffer, which nothing reads now).
+- Code+data `$0801-$584F`, BSS and slabs to `$7A53`. No `floats` import. 40 compiler warnings, all "always true/false", a constant `when`, a removed zero-iteration loop or an unused test variable, from switches.
 
 ## Phase 8: Art, animation and sound
 **Status:** not started

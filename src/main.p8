@@ -1,4 +1,5 @@
-; C64 platformer. Phase 5b: generated levels with tile damage, treasures, score, timer and enemies (navigation AI).
+; Smashy Smashy, a C64 platformer. Game flow (spec section 9): title, READY? pause, play, level complete
+; dissolve, game over.
 
 %import video
 %import input
@@ -7,6 +8,7 @@
 %import nav
 %import score
 %import levelgen
+%import title
 %zeropage basicsafe
 %memtop $C000
 
@@ -18,7 +20,6 @@ main {
 
     ; Debug key: F1 generates a new level instantly (timer and score kept).
     const bool REGEN_KEY = true
-    const ubyte KEY_F1 = 133
 
     ; Self-test: after each generation, HUD cols 0-1 = attempts in hex (+$80 = fallback layout),
     ; col 2 = level check result (0 = ok, see check_level), cols 38-39 = generation time in frames (hex).
@@ -28,13 +29,17 @@ main {
     const ubyte SOAK_COUNT = 200
 
     ; Self-test: worst frame in raster lines, from the frame IRQ line (so the KERNAL IRQ counts) to the end of
-    ; the HUD update, hex on HUD cols 37-39. Over 312 (PAL lines per frame) means a dropped frame; the jiffy
-    ; clock (ticked by the frame IRQ) counts the whole frames that passed.
+    ; the HUD update, hex on HUD cols 37-39. Over 312 (PAL lines per frame) means a dropped frame; the frame
+    ; counter (ticked by the frame IRQ) counts the whole frames that passed.
     const bool FRAME_STATS = false
     ; Self-test scenario (0 = off). Sets up enemies and the input script after each level load and shows a
     ; readout on char row 1 (see test_setup and test_hud). Needs input.SCRIPTED; 2-6, 10-11 and 15-21 need
     ; levelgen.FORCE_FAIL, 7-8, 12 and 20 (frame budget) need FRAME_STATS. 9 (link replay) needs neither.
+    ; 22 (game flow) runs the title screen; every other test skips it. 22 needs neither FORCE_FAIL nor
+    ; FRAME_STATS.
     const ubyte TEST = 0
+    const bool SKIP_TITLE = TEST != 0 and TEST != 22
+    const uword COMPLETE_AT = 0         ; any TEST: play frames until the level counts as complete (0 = off)
     const ubyte LINK_LEVELS = 20        ; TEST 9: levels to check
     const ubyte LINK_HOLES = 0          ; TEST 9: random platform tiles destroyed in each level before the check
     const bool LINK_MAX_SPEED = false   ; TEST 9: enemies at the level-11 speed cap instead of level 1
@@ -45,23 +50,82 @@ main {
     ; number of finished map rebuilds.
     const bool NAV_DEBUG = false
 
+    ; [TUNE]
+    const ubyte READY_FRAMES = 150      ; READY? pause, 3 s
+    const ubyte DISSOLVE_RATE = 8       ; tiles erased per frame at level complete
+    const ubyte GAME_OVER_WAIT = 50     ; frames before fire returns to the title
+    const ubyte MSG_ROW = 12            ; centre of the playfield
+
     sub start() {
         video.init()
-        video.draw_hud_labels()
-        video.hud_level($01)
-        score.new_game()
         levelgen.init()
-        levelgen.seed()
-        video.start_frame_irq()         ; first, so the jiffy clock counts frames while generating
+        title.init()
+        video.start_frame_irq()         ; first, so the frame counter counts while generating
         if GEN_SOAK
             soak()
-        load_level()
+        if SKIP_TITLE
+            levelgen.seed()
+        if TEST == 22
+            input.script = &script_flow
 
+        repeat {
+            if not SKIP_TITLE
+                title.run()             ; returns when fire is pressed, with the RNG seeded
+            new_game()
+            repeat {
+                level_start()
+                if not play()
+                    break
+                level_complete()
+            }
+            game_over()
+        }
+    }
+
+    sub new_game() {
+        video.set_game_mode()
+        video.draw_hud_labels()
+        score.new_game()
+        ; empty playfield with the floor, the player at the start
+        sys.memset(&video.tiles, levelgen.CELLS, video.T_EMPTY)
+        sys.memset(&video.tiles + levelgen.CELLS, video.MAP_W, video.T_FLOOR)
+        video.draw_level()
+        player.init()
+    }
+
+    ubyte ready_frames                  ; self-test readout: length of the last READY? pause, generation time
+    ubyte gen_frames
+
+    sub level_start() {
+        ; READY? for 3 s (spec section 9). The next level is generated and drawn meanwhile; the timer is paused.
+        ubyte t0 = video.frames
+        player.hold_at_start()
+        player.draw()
+        video.message(MSG_ROW, 17, sc:"ready?")
+        load_level()
+        gen_frames = video.frames - t0
+        video.message(MSG_ROW, 17, sc:"ready?")
+        while video.frames - t0 < READY_FRAMES {
+        }
+        ready_frames = video.frames - t0
+        video.restore_tiles(MSG_ROW, 17, 6)
+        player.init()                   ; falling from the start; the enemies' warning flicker starts now
+        player.draw()
+        if TEST != 0
+            test_setup()
+        video.frame_ready = false       ; start the first frame on a fresh one
+    }
+
+    sub play() -> bool {
+        ; PLAYING. Returns true when the level is complete, false when the time has run out.
+        play_frames = 0
         repeat {
             video.wait_frame()
             if FRAME_STATS
-                frame_jiffy = cbm.TIME_LO
+                frame_start = video.frames
             input.read()
+            if input.pressed & input.STOP != 0
+                pause()
             player.update()
             enemies.update()
             enemies.contact()
@@ -71,12 +135,23 @@ main {
                 debug_hud()
             if NAV_DEBUG
                 nav_debug()
-            if REGEN_KEY and cbm.GETIN2() == KEY_F1
+            if REGEN_KEY and input.pressed & input.F1 != 0 {
                 load_level()
-            if score.treasures_left == 0
-                level_complete()
-            else if score.tick()
-                game_over()
+                player.init()
+                player.draw()
+                video.frame_ready = false
+            }
+            if TEST != 0
+                test_frame()
+            video.shake_step()
+            if score.treasures_left == 0 {
+                video.stop_shake()
+                return true
+            }
+            if score.tick() {
+                video.stop_shake()
+                return false
+            }
             nav.idle_build()            ; last: map rebuild slices only use the time left in the frame
             if FRAME_STATS
                 frame_stats()
@@ -85,9 +160,22 @@ main {
         }
     }
 
+    sub pause() {
+        ; Run/Stop again resumes. Everything is frozen meanwhile, the timer too.
+        video.stop_shake()
+        video.message(MSG_ROW, 17, sc:"paused")
+        do {
+            video.wait_frame()
+            input.read()
+        } until input.pressed & input.STOP != 0
+        video.restore_tiles(MSG_ROW, 17, 6)
+        player.show_target()
+        input.pressed = 0               ; the resume press is not a game input
+    }
+
     ; ---- frame budget self-test ----
     uword worst_lines
-    ubyte frame_jiffy
+    ubyte frame_start
 
     sub raster_line() -> uword {
         ; 9-bit raster line ($D011 bit 7 is bit 8), re-read if the line changed between the two reads
@@ -107,7 +195,7 @@ main {
             lines = now - video.FRAME_IRQ_LINE
         else
             lines = now + 312 - video.FRAME_IRQ_LINE    ; PAL: 312 lines per frame
-        repeat cbm.TIME_LO - frame_jiffy
+        repeat video.frames - frame_start
             lines += 312
         if lines > worst_lines {
             worst_lines = lines
@@ -117,20 +205,15 @@ main {
     }
 
     sub load_level() {
-        ubyte t0 = cbm.TIME_LO
-        levelgen.generate(1)
-        ubyte frames = cbm.TIME_LO - t0
+        ; Generate and draw the level for score.level and place the enemies (shown once play starts).
+        ubyte t0 = video.frames
+        levelgen.generate(score.level)
+        ubyte frames = video.frames - t0
         video.draw_level()
         score.new_level()
-        player.init()
-        player.draw()
         nav.new_level()
-        enemies.new_level(1)
+        enemies.new_level(score.level)
         enemies.place_all()
-        enemies.draw()
-        if TEST != 0
-            test_setup()
-        video.frame_ready = false       ; IRQs set it while loading; start the next frame on a fresh one
         if GEN_STATS {
             hex_byte(0, if levelgen.used_fallback levelgen.attempts | $80 else levelgen.attempts)
             hex_digit(2, check_level())
@@ -138,23 +221,62 @@ main {
         }
     }
 
+    ubyte[levelgen.CELLS] dissolve_order
+
     sub level_complete() {
-        ; Placeholder: show the message for 2 s (timer paused), then generate a new level with more time.
-        video.message(7, 13, sc:"level complete")
-        repeat 100 {
+        ; Enemies vanish, the platforms dissolve in random order and the player floats back to the start.
+        ; The timer is paused. Then the next level number and +60 s.
+        ubyte i
+        for i in enemies.FIRST to enemies.LAST
+            video.hide_sprite(i)
+        if enemies.kills == 0
+            score.add_points(score.NO_KILL_BONUS)
+        player.start_float()
+        for i in 0 to levelgen.CELLS - 1
+            dissolve_order[i] = i
+        ubyte n = 0                     ; cells done; the order is shuffled as it goes (Fisher-Yates)
+        bool floating = true
+        while n != levelgen.CELLS or floating {
             video.wait_frame()
-            input.read()
+            repeat DISSOLVE_RATE {
+                if n == levelgen.CELLS
+                    break
+                ubyte j = n + levelgen.rand_below(levelgen.CELLS - n)
+                ubyte idx = dissolve_order[j]
+                dissolve_order[j] = dissolve_order[n]
+                n++
+                if video.tiles[idx] != video.T_EMPTY {
+                    video.tiles[idx] = video.T_EMPTY
+                    video.draw_tile(levelgen.cell_col[idx], levelgen.cell_row[idx])
+                }
+            }
+            if floating {
+                player.update()
+                if actors.state[0] != player.FLOATING {
+                    floating = false
+                    player.hold_at_start()
+                }
+            }
+            player.draw()
         }
-        load_level()
-        score.add_time(score.LEVEL_TIME_BONUS)
+        score.next_level()
     }
 
     sub game_over() {
-        ; Placeholder: freeze with the message on screen.
-        video.message(7, 15, sc:"game over")
-        repeat {
+        ; Final score and level stay on the HUD row. Fire (after a short wait) returns to the title.
+        score.update_high()
+        video.message(10, 15, sc:"game over")
+        video.message(14, 11, sc:"high score")
+        uword hs = video.SCREEN + 14 * 40 + 22
+        video.put_digits(hs, score.high, 4)
+        video.put_digits(hs + 4, 0, 2)
+        sys.memset(hs + video.COLOR_RAM - video.SCREEN, 6, video.COLOR_HUD)
+        repeat GAME_OVER_WAIT
             video.wait_frame()
-        }
+        do {
+            video.wait_frame()
+            input.read()
+        } until input.pressed & input.FIRE != 0
     }
 
     ; ---- level generator self-test ----
@@ -225,9 +347,9 @@ main {
         ubyte done = 0
         sys.memset(video.SCREEN, 40, video.CHAR_SPACE)
         repeat SOAK_COUNT {
-            ubyte t0 = cbm.TIME_LO
+            ubyte t0 = video.frames
             levelgen.generate(1)
-            ubyte frames = cbm.TIME_LO - t0
+            ubyte frames = video.frames - t0
             if levelgen.used_fallback
                 fallbacks++
             else if levelgen.attempts > most
@@ -285,7 +407,57 @@ main {
     ubyte warn_overlap                  ; frames the player's box overlapped an enemy in WARNING
     ubyte enemy_inside
 
+    ; TEST 22 (game flow), as read by input.read() on the title, in play, while paused and at game over:
+    ; title: fire after 120 frames. Level 1: Run/Stop after 40 play frames, again 150 frames later (pause);
+    ; the level is completed at play frame 100. Level 2: the time is set to 3 s at play frame 10, so the game
+    ; ends. Game over: fire. Title: fire after 150 frames, the second game starts.
+    ubyte[] script_flow = [
+        120, 0, 5, input.FIRE,
+        40, 0, 2, input.STOP, 150, 0, 2, input.STOP,
+        250, 0, 120, 0, 5, input.FIRE,
+        150, 0, 5, input.FIRE,
+        0, 0
+    ]
+    uword play_frames
+
+    sub test_frame() {
+        ; Runs every play frame (not while paused).
+        play_frames++
+        if COMPLETE_AT != 0 and play_frames == COMPLETE_AT
+            score.treasures_left = 0
+        if TEST == 22 {
+            if score.level == 1 and play_frames == 100
+                score.treasures_left = 0
+            if score.level == 2 and play_frames == 10
+                score.time = $0003
+        }
+    }
+
+    sub flow_hud() {
+        ; TEST 22, char row 1, hex: r=frames of the last READY? pause, g=its generation time, k=enemies
+        ; destroyed this level, e=enemy 1-5 states (7 = warning), z=play frames this level, p=score.
+        sys.memset(video.COLOR_RAM + 40, 40, video.COLOR_HUD)
+        test_text(0, sc:"r")
+        test_hex(1, ready_frames)
+        test_text(4, sc:"g")
+        test_hex(5, gen_frames)
+        test_text(8, sc:"k")
+        test_hex(9, enemies.kills)
+        test_text(12, sc:"e")
+        ubyte i
+        for i in enemies.FIRST to enemies.LAST
+            @(video.SCREEN + 40 + 12 + i) = hex_char(actors.state[i])
+        test_text(19, sc:"z")
+        test_hex(20, msb(play_frames))
+        test_hex(22, lsb(play_frames))
+        test_text(25, sc:"p")
+        test_hex(26, msb(score.points))
+        test_hex(28, lsb(score.points))
+    }
+
     sub test_setup() {
+        if TEST == 22
+            return
         if TEST == 1 {
             spawn_soak()
             return
@@ -922,6 +1094,10 @@ main {
     }
 
     sub test_hud() {
+        if TEST == 22 {
+            flow_hud()
+            return
+        }
         if TEST == 12 or (FRAME_STATS and (TEST == 7 or TEST == 8 or TEST == 20)) {
             ; no readout (it would take too long here, and the next frame would start late): HUD cols 30-35 =
             ; map rebuilds, dropped frames, col 26 = slowest rebuild in frames

@@ -19,6 +19,10 @@ levelgen {
 
     ; Self-test only (keep false): every attempt fails, so generate() always ends with the fallback layout.
     const bool FORCE_FAIL = false
+    ; Self-test only (keep false): seed from the frame counter alone. VICE runs start with a little timing
+    ; jitter, which changes the CIA timer and raster line, so screenshots from separate runs would see
+    ; different levels. A fire press on a different frame still gives a different seed.
+    const bool FRAME_SEED = false
 
     ubyte attempts                      ; attempts made by the last generate()
     bool used_fallback
@@ -69,7 +73,11 @@ levelgen {
     }
 
     sub seed() {
-        ; Placeholder until the title screen (phase 7) seeds on the fire press.
+        ; Called when fire starts a game on the title screen (spec section 7).
+        if FRAME_SEED {
+            math.rndseed(mkword(video.frames, $5A), mkword($C3, video.frames))
+            return
+        }
         cx16.r0 = mkword(c64.RASTER, c64.CIA1TAH)
         math.rndseed(mkword(c64.CIA1TAL, c64.RASTER), cx16.r0)
     }

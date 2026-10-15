@@ -9,6 +9,7 @@ score {
     const ubyte TREASURES_PER_LEVEL = 10
     const ubyte FRAMES_PER_SECOND = 50
     const uword HIT_PENALTY = $0010         ; BCD seconds
+    const ubyte NO_KILL_BONUS = $25         ; BCD hundreds, level completed without destroying an enemy
 
     const uword MAX_POINTS = $9999          ; BCD hundreds, shown as 999900
 
@@ -16,6 +17,9 @@ score {
     uword time                              ; BCD seconds, 3 digits
     ubyte time_frames                       ; frames left in the current second
     ubyte treasures_left
+    ubyte level                             ; 1-based
+    ubyte level_bcd                         ; the same for the HUD
+    uword high                              ; session high score, BCD hundreds
 
     ; treasure type t is worth t + 1 hundred points, as BCD
     ubyte[15] treasure_points = [$01, $02, $03, $04, $05, $06, $07, $08,
@@ -25,8 +29,24 @@ score {
         points = 0
         time = START_TIME
         time_frames = FRAMES_PER_SECOND
+        level = 1
+        level_bcd = $01
         video.hud_score(points)
         video.hud_time(time)
+        video.hud_level(level_bcd)
+    }
+
+    sub next_level() {
+        level++
+        level_bcd = bcd.addub(level_bcd, 1)
+        video.hud_level(level_bcd)
+        add_time(LEVEL_TIME_BONUS)
+    }
+
+    sub update_high() {
+        ; BCD values compare like plain numbers
+        if points > high
+            high = points
     }
 
     sub new_level() {

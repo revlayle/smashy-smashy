@@ -199,8 +199,11 @@ player {
         video.draw_tile(col, row)
         if idx == target_idx
             target_idx = NO_TARGET      ; the redraw removed the highlight
-        if video.tiles[idx] != video.T_EMPTY
+        if video.tiles[idx] != video.T_EMPTY {
+            video.shake(video.SHAKE_CRACK)
             return false                ; was solid, now damaged: normal landing
+        }
+        video.shake(video.SHAKE_SMASH)
         ; destroyed: the enemies' platform map changes. Centre the box over the hole so the fast-fall continues.
         nav.tile_destroyed()
         actors.x[0] = (col as uword << 4) + (16 - actors.BOX_W) / 2
@@ -249,8 +252,13 @@ player {
     }
 
     sub hit() {
-        ; Lose time, then float in a straight line to the start point (ignoring tiles, enemies and input).
+        ; Lose time, then float back to the start.
         score.lose_time(score.HIT_PENALTY)
+        start_float()
+    }
+
+    sub start_float() {
+        ; Float in a straight line to the start point (ignoring tiles, enemies and input).
         actors.state[0] = FLOATING
         actors.vy[0] = 0
         actors.x_frac[0] = 0
@@ -286,6 +294,20 @@ player {
                 actors.y[0]--
             }
         }
+    }
+
+    sub hold_at_start() {
+        ; At the start point in the float pose, with no control (level transitions). init() ends it.
+        actors.x[0] = START_X
+        actors.y[0] = START_Y
+        actors.state[0] = FLOATING
+        invuln_timer = 0
+    }
+
+    sub show_target() {
+        ; Highlight the fast-fall target again after something redrew its tile (a message).
+        if target_idx != NO_TARGET
+            video.highlight_tile(target_col, target_row)
     }
 
     sub draw() {

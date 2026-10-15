@@ -29,6 +29,7 @@ video {
     const uword SPRITE_DATA = $E800
     const ubyte HUD_FONT_CHARS = 64     ; ROM screen codes 0-63: @, A-Z, space, digits, punctuation
     const ubyte CHAR_SPACE = 32
+    const ubyte CHAR_BLOCK = 255        ; solid 8x8 block (title letters), set up by init()
 
     ; ---- tile map (spec section 4) ----
     const ubyte MAP_W = 20
@@ -90,6 +91,7 @@ video {
         ; CPU writes to $E000-$FFFF reach the RAM under the KERNAL ROM
         sys.memcopy(&chars_bin, CHARSET + (assets.TILE_FIRST_CHAR as uword) * 8, (assets.TILE_COUNT as uword) * 32)
         sys.memcopy(&sprites_bin, SPRITE_DATA, (assets.SPRITE_COUNT as uword) * 64)
+        sys.memset(CHARSET + (CHAR_BLOCK as uword) * 8, 8, $FF)
 
         if MULTICOLOR {
             ubyte i
@@ -116,6 +118,22 @@ video {
         c64.BGCOL2 = COLOR_CHAR_MC2
         c64.SPMC0 = COLOR_SPR_MC1
         c64.SPMC1 = COLOR_SPR_MC2
+    }
+
+    sub set_title_mode() {
+        ; Blank screen in hi-res character mode (all 16 colours per cell), no sprites.
+        spr_ena = 0
+        sys.memset(SCREEN, 1000, CHAR_SPACE)
+        c64.SCROLX &= %11101111
+    }
+
+    sub set_game_mode() {
+        ; Blank screen in the game's character mode. Sprites come back as the game draws them.
+        ; Colour RAM too: the title leaves letter colours (multicolour values) where the HUD goes.
+        sys.memset(SCREEN, 1000, CHAR_SPACE)
+        sys.memset(COLOR_RAM, 1000, COLOR_HUD)
+        if MULTICOLOR
+            c64.SCROLX |= %00010000
     }
 
     sub draw_tile(ubyte col, ubyte row) {
@@ -165,9 +183,13 @@ video {
     }
 
     sub hud_digits(ubyte col, uword bcd, ubyte digits) {
-        ; Print the low `digits` BCD nibbles of bcd, most significant first, starting at col.
+        put_digits(SCREEN + col, bcd, digits)
+    }
+
+    sub put_digits(uword addr, uword bcd, ubyte digits) {
+        ; Print the low `digits` BCD nibbles of bcd, most significant first, starting at screen address addr.
         ; Only digits that differ from what is on screen are written.
-        ^^ubyte @zp scr = SCREEN + col + digits - 1
+        ^^ubyte @zp scr = addr + digits - 1
         ubyte ch
         repeat digits {
             ch = '0' as ubyte + (lsb(bcd) & 15)
@@ -179,7 +201,7 @@ video {
     }
 
     sub message(ubyte row, ubyte col, str text) {
-        ; Hi-res text over the playfield (placeholder messages). draw_level() erases it.
+        ; Hi-res text over the playfield. draw_level() or restore_tiles() erases it.
         ^^ubyte @zp scr = SCREEN + (row as uword) * 40 + col
         ubyte i = 0
         while text[i] != 0 {
@@ -187,6 +209,14 @@ video {
             i++
         }
         sys.memset(scr + COLOR_RAM - SCREEN, i, COLOR_HUD)
+    }
+
+    sub restore_tiles(ubyte row, ubyte col, ubyte n) {
+        ; Redraw the tiles under n chars of a message at char row 1-24, starting at col.
+        ubyte trow = (row - 1) >> 1
+        ubyte tcol
+        for tcol in col >> 1 to (col + n - 1) >> 1
+            draw_tile(tcol, trow)
     }
 
     sub draw_hud_labels() {
@@ -218,6 +248,40 @@ video {
     ubyte spr_msb
     ubyte spr_ena
     bool frame_ready
+    ubyte scroll_y = 3                  ; vertical fine scroll ($D011 bits 0-2), set by the frame IRQ (shakes)
+    ubyte spr_dy                        ; added to every sprite's y by the frame IRQ, so sprites shake with the screen
+
+    ; ---- gameplay screen shake [TUNE] ----
+    const ubyte NORMAL_SCROLL = 3
+    const ubyte SHAKE_PX = 2            ; the screen and sprites drop this far on alternate frames
+    const ubyte SHAKE_CRACK = 4         ; frames: fast-fall cracks a tile
+    const ubyte SHAKE_SMASH = 8         ; frames: fast-fall destroys a tile, or kills an enemy
+    ubyte shake_left
+
+    sub shake(ubyte frames) {
+        ; Start a shake, or restart it if this one is longer than what is left (shakes don't stack).
+        if frames > shake_left
+            shake_left = frames
+    }
+
+    sub shake_step() {
+        ; Once per play frame.
+        if shake_left != 0
+            shake_left--
+        if shake_left & 1 != 0 {
+            scroll_y = NORMAL_SCROLL + SHAKE_PX
+            spr_dy = SHAKE_PX
+        } else {
+            scroll_y = NORMAL_SCROLL
+            spr_dy = 0
+        }
+    }
+
+    sub stop_shake() {
+        shake_left = 0
+        shake_step()
+    }
+    ubyte frames                        ; counts frame IRQs (replaces the KERNAL jiffy clock)
 
     sub start_frame_irq() {
         sys.set_rasterirq(&frame_irq, FRAME_IRQ_LINE)
@@ -225,7 +289,8 @@ video {
 
     sub frame_irq() -> bool {
         ; Runs in the IRQ: no virtual registers, nothing slow.
-        ; Unrolled copy of the 8 sprites' pointer, color, x and y (lda/sta pairs, about 256 cycles).
+        ; Unrolled copy of the 8 sprites' pointer, color, x and y (lda/sta pairs, about 300 cycles).
+        ; y gets spr_dy added (screen shake).
         %asm {{
             .for _n := 0, _n < 8, _n += 1
             lda  p8b_video.p8v_spr_ptr+_n
@@ -235,13 +300,17 @@ video {
             lda  p8b_video.p8v_spr_x+_n
             sta  c64.SPXY+_n*2
             lda  p8b_video.p8v_spr_y+_n
+            clc
+            adc  p8b_video.p8v_spr_dy
             sta  c64.SPXY+_n*2+1
             .endfor
         }}
         c64.MSIGX = spr_msb
         c64.SPENA = spr_ena
+        c64.SCROLY = (c64.SCROLY & %01111000) | scroll_y   ; bit 7 (raster compare bit 8) stays 0
         frame_ready = true
-        return true                     ; chain to the KERNAL IRQ (keyboard scan)
+        frames++
+        return false                    ; no KERNAL IRQ: the game reads the keyboard matrix itself
     }
 
     sub frame_lines() -> ubyte {
