@@ -133,7 +133,9 @@ Max speed stays under 16 px/f, so collision never tunnels through a tile.
 ### Contact with the player (checked in this order)
 1. Player in `FASTFALL`, player's bottom edge in the top half of the enemy box → **kill**: enemy destroyed, any carried treasure dropped, score 2, 4, 8, 16, 32 hundred by chain (§8), `chain += 1` (max 4), player → `LAUNCHED` 32 px.
 2. Player falling (vy > 0, not fast-fall) with the same geometry → **stomp** ("bonk"). Any downward fall counts: the descent of a jump, walking off a ledge, or coming down from a bounce or launch: carried treasure dropped, player bounces 24 px. Enemy survives. No score.
-3. Otherwise → player is hit (unless invulnerable or floating).
+3. Otherwise → player is hit (unless invulnerable or floating). This includes jumping up into an enemy from below and any side contact.
+
+Bonks are unlimited: an enemy can be bonked again as soon as the player comes back down on it. **Alternate if that feels bad in play:** a bonked enemy is stunned for 1 s (doesn't move, harmless, can't be bonked again, can still be fast-fall killed).
 
 ### Movement
 - Same physics routine as the player, minus fast-fall.
@@ -182,17 +184,18 @@ Decisions at most every 8 frames per enemy, staggered so at most one enemy decid
 - Target is the **hideout**: the platform with the largest `hops` from the player's platform, reachable from the carrier's current platform. Ties go to platforms with more than one outgoing link (avoids dead ends).
 - Re-plan when the player is within 5 tiles (Manhattan) or on the carrier's platform, and every 32 frames otherwise.
 - A carrier never moves toward the player on purpose. If its next link would bring it onto the player's platform, it picks the next-best hideout.
-- **Tiring:** after holding a treasure for 20 s, the carrier moves at 75% of its normal speed until it loses the treasure. **[TUNE]** (Default chosen by Claude; designer may remove.)
 - **Contact:** touching a carrier from the side hits the player like any enemy. The treasure only comes loose by a stomp or a fast-fall kill.
 - When it loses the treasure, the enemy returns to its slot's role.
 
 ### Treasure handling
-- Not carrying and the box overlaps a treasure tile → pick it up (tile cleared, `carrying = 1 + type`). Shown by a color change: a carrying enemy uses `ENEMY_CARRY_COLOR` instead of `ENEMY_COLOR` (sprite color register $D027+n). No extra frames.
+- An enemy that just lost a treasure can't pick one up for 3 s (`pickup_cooldown`), so the player has a fair chance to grab it.
+- Not carrying, no cooldown, and the box overlaps a treasure tile → pick it up (tile cleared, `carrying = 1 + type`). Shown by a color change: a carrying enemy uses `ENEMY_CARRY_COLOR` instead of `ENEMY_COLOR` (sprite color register $D027+n). No extra frames.
 - Dropping: the treasure is placed in the tile at the enemy's centre, or the nearest empty tile above it, then falls one tile every 4 frames until it rests on a solid tile.
 
 ### Respawn
 - Destroyed enemy → `respawn_timer = max(10 - (level - 1), 3)` seconds. **[TUNE]**
 - Respawn location: a random empty tile standing on a solid tile, at least 8 tiles (Manhattan) from the player. Up to 20 tries, then the farthest valid candidate.
+- **Warning flicker:** a respawning enemy appears at its spot and flickers for 1 s before it becomes active. While flickering it doesn't move and has no contact with the player at all (no hit, bonk or kill).
 
 ## 7. Level generation
 
@@ -241,10 +244,12 @@ TITLE --fire--> NEW_GAME --> LEVEL_START --> PLAYING
 PLAYING --10 treasures--> LEVEL_COMPLETE --> LEVEL_START (level+1, +60 s)
 PLAYING --time 0--> GAME_OVER --fire--> TITLE
 ```
-- **TITLE**: minimal "press fire" screen, needed to seed the RNG and to restart. Not in the design doc; can stay bare.
+- **TITLE**: minimal "press fire" screen, needed to seed the RNG and to restart. Shows the session high score.
+- **Pause**: Run/Stop toggles pause during PLAYING (edge-triggered, press again to resume). Everything freezes, including the timer; "PAUSED" is shown. Ignored during transitions.
 - **LEVEL_START**: generate, draw the level, place enemies, player at start in `FALLING`.
 - **LEVEL_COMPLETE**: enemies vanish. Non-floor tiles are erased in random order, ~8 tiles per frame (about 1 s). The player floats to the start. The next level is generated during the float.
 - **GAME_OVER**: show the final score and level reached; fire → TITLE.
+- **Session high score**: the best score since the program started, kept in RAM (lost on power-off). Updated at game over, shown on the title and game-over screens. A saved high-score list is backlog (see §14).
 
 ## 10. Assets
 
@@ -337,12 +342,22 @@ None at the moment.
 - Stomp (landing on an enemy without fast-fall): 24 px bounce, no score, enemy survives, carried treasure drops.
 - Air control: full, at run speed, except during fast-fall, which drops straight down.
 - Timer runs during the post-hit float; the float is fast (4 px/f, < 1 s worst case).
+- Unlimited bonks on the same enemy (1 s stun is the noted alternate). Jumping up into an enemy is a hit.
+- Respawning enemies flicker harmlessly for 1 s before activating.
+- 3 s pickup cooldown for an enemy that just lost a treasure.
+- Pause on Run/Stop. Session high score in RAM.
 - Bonks chain: a bonk's bounce can land on another enemy for another bonk. Bonks score nothing and leave the fast-fall kill chain unchanged: they neither advance it nor reset it (only landing on a tile resets it).
 - Enemy AI: platform-map navigation with roles (chasers, ambusher, hunters), built in two phases (5a simple, 5b navigation).
-- Carriers flee to a hideout far from the player. Side contact with a carrier hits the player; only a stomp or kill frees the treasure. Tiring after 20 s is a Claude default, open to removal.
+- Carriers flee to a hideout far from the player. Side contact with a carrier hits the player; only a stomp or kill frees the treasure. No tiring mechanic.
 - Drilling: destroying a damaged tile with a fast-fall keeps the player fast-falling through the hole.
 - Graphics: multicolor first, kept switchable to hi-res via one constant.
 - Treasure types: `min(14, (level - 1) + randrange(5))`.
 - Carrying enemy: shown by a color change.
 - Art: placeholder art by Claude, in editable text files converted at build time.
 - Sound: left out until milestone 8, then basic SID effects only (no music). Each effect is a small table of SID settings (waveform, envelope, start pitch, pitch slide per frame, length), played on one voice and stepped once per frame by the frame IRQ. Effects: jump, land/damage tile, collect treasure, enemy kill, player hit, level complete.
+
+## 14. Backlog
+
+Ideas for after phase 8, not scheduled:
+- Saved high-score list (to disk), with name entry.
+- Treasures enclosed by platforms, reachable only by drilling ("drill pockets", §7).

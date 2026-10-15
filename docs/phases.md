@@ -174,12 +174,15 @@ Build:
 - Contact rules in order: kill (fast-fall), stomp (bounce 24 px), hit.
 - Kill: launch 32 px, chain scoring 2, 4, 8, 16, 32 hundred (spec §8), chain reset on landing, respawn timer and placement rules.
 - Hit: -10 s, straight-line FLOATING to start at 4 px/f, 2 s invulnerability with flicker.
+- Respawn with 1 s warning flicker (inactive, no contact). Unlimited bonks.
 
 Done when:
 - [ ] Screenshot: 5 enemies spawned ≥ 8 tiles from the player start.
 - [ ] Scripted test: fast-fall onto an enemy → enemy gone, +200, player launched.
 - [ ] Scripted test: normal fall onto an enemy → bounce, enemy survives, no points.
 - [ ] Scripted test: walking into an enemy → time -10, player floats back, then flickers.
+- [ ] Scripted test: jumping up into an enemy from below → hit.
+- [ ] Scripted test: a respawning enemy flickers for 1 s and the player can pass through it without any contact result.
 - [ ] Frame budget holds with 5 enemies: no slowdown. Measure the worst frame in raster lines (read the raster line at the start and end of the frame update, keep the maximum, show it on the HUD in a test build) and note it. The pre-phase-5 baseline was 58 lines.
 
 ## Phase 5b: Navigation AI
@@ -205,7 +208,7 @@ Done when:
 
 Build:
 - Enemy pickup (color change), drop on stomp or kill, dropped treasure falls one tile every 4 frames until it rests.
-- Carrier role: hideout choice by `hops`, re-plan rules, never routes onto the player's platform, tiring after 20 s, return to slot role after losing the treasure.
+- Carrier role: hideout choice by `hops`, re-plan rules, never routes onto the player's platform, return to slot role after losing the treasure. 3 s pickup cooldown after losing a treasure.
 - Level completion still counts only treasures the player collects.
 
 Done when:
@@ -213,8 +216,8 @@ Done when:
 - [ ] Scripted test: stomp a carrier → treasure reappears and settles on a platform.
 - [ ] A treasure dropped where the cell is occupied lands in the nearest free cell above.
 - [ ] Scripted test: player approaches a carrier → the carrier moves away (its `hops` from the player's platform goes up, or it leaves the player's platform).
-- [ ] Tiring: a carrier holding a treasure for 20 s moves at 75% speed (debug readout).
-- [ ] Report lists feel items for the designer: is a carrier catchable, how long a chase takes, is tiring needed.
+- [ ] Scripted test: bonk a carrier → it does not re-take the dropped treasure within 3 s.
+- [ ] Report lists feel items for the designer: is a carrier catchable, how long a chase takes.
 
 ## Phase 7: Game flow and difficulty
 **Status:** not started
@@ -224,11 +227,15 @@ Build:
 - States TITLE, NEW_GAME, LEVEL_START, PLAYING, LEVEL_COMPLETE, GAME_OVER.
 - Title screen (seeds RNG on fire), dissolve transition (~8 tiles/frame), player floats to start while the next level generates, timer paused during transitions.
 - No-kill bonus +2500, level counter, enemy speed and respawn scaling.
+- Pause on Run/Stop (toggle, timer frozen, "PAUSED" shown).
+- Session high score: updated at game over, shown on title and game-over screens.
 
 Done when:
 - [ ] Full loop works: title → play → complete level → next level → time runs out → game over → title.
 - [ ] Two games started at different moments get different first levels.
 - [ ] Bonus awarded only when no enemy was destroyed during the level.
+- [ ] Pause freezes the game and timer, and resumes cleanly (scripted key press via VICE `-keybuf` or a test switch).
+- [ ] A second game shows the first game's score as the high score on the title screen.
 
 ## Phase 8: Art, animation and sound
 **Status:** not started
