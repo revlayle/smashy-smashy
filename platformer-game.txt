@@ -1,0 +1,74 @@
+C64 sample platformer game.
+
+A single screen game.  Has multiple different screens.
+
+Level:
+A level is a series of platforms the player can run around, jump, and fall onto.
+A level is procedurally generated.
+A level has 10 tresures.
+A level has 5 enemies.
+A level has a timer.
+
+Player:
+The player is a 16x16 pixel sprite.
+The player can run left and right with joystick.
+Pressing the joystick button will cause the player to jump.  
+Holding the button causes the player to keep rising up to 80 pixels in height (player can jump high)
+Releasing the button at any time before jump apex will start a descent. however a descent happens when player reaches max jump height.
+Once descending the button does nothing else until the player hits a surface again.
+Player can fall off platforms onto other platforms.
+Player never recieves fall damage, can fall the entirety of the playfield.
+If the player presses down on the joystick while in mid-air from a jump or a fall, it will go into fast-fall mode. Basically it speeds up to a maximim define fall speed immediately.
+If the player hits a platform in fast-fall mode, it will damage that platform square.
+If player touches a treasure, they collect it and score points.
+Player can destroy enemies (see below) in fast-fall mode. If a player destroys an enemy with fast-fall, they are propelled back up 32 pixels.
+
+Platforms:
+Players and enemies can walk left or right on them
+The first hit from a fast-fall on platform damages it.  The second time destroys it.
+The bottom row of the playfield are always a full row of indestrctible platforms.
+
+Enemies:
+Enemies try to get the player.
+Enemies when they are near a treasure will grab a treasure
+Enemies can hold one treasure.
+Enemies can fall, on purpose even.
+Enemies cannot fast-fall, that is a player-only ability.
+If the player touches an enemy, the player is "hit"
+Exceptions: if the player falls onto an enemie they bounce off. If the enemy was carrying a treasure, it drops.
+Exceptions: if the player fast-falls onto an enemy it destroys the enemy, and treasure they have is dropped.
+Enemies can jump, up to 40 pixels (half height of the player)
+Enemeies are not required to be destoryed to finish a level, in fact a bonus can be given if no enemies are destroyed.
+An Anemy, when destroyed will respawn in 10 seconds, but at higher levels, the respawn time is shorter.  Enemies will never respawn to close to the player.
+
+Scoring:
+Treasures - there are 15 types of treasuures, starting at 100 points, eventually reach 1500 points a piece.
+Enemies - first one is 200 points, if you can chain fast-fall kills, get launched and hit another enemy before touching thr ground, the score will double.  It is possible to get 200, 400, 800, 1600, 3200 points of you chain all 5.
+Complete a level without damaging an enemy = 2500 points. This makes that strategy worth it, but  if you can cluster enemies together, you can score way more.
+
+Gameplay loop:
+Player always starts in the top middle of the playfield, regardless if a platform is below them.
+Playfield is generated (see playfield genreation below).
+Timer is set at something equivalent to 60 seconds.
+Enemies are generated, usually not near the player.
+Level starts.
+Once all 10 treasures are collected the level is complete.  The level "dissolves" (except for the permanent bottom floor), the player floats back to the starting positions, and a new level begins. 60 seconds of timer is added to the clock.
+The player has infinite lives.
+If the player is "hit", thye float back to the start AND lose 10 seconds of time. Player regains control when they hit the starting positions, they are invicible for 2 seconds to avoid accidental death collisions
+When the player is floating to the start position, they interact with nothing on the screen, nor does the player have control.
+Game is over when time runs out
+
+Assets:
+Player sprite (16x16) - left and right running annimations.  Jump up poses (left and right).  Fall poses (left and right).  Fast fall pose (faces the toward the actual IRL player).  Float animation (faces the toward the actual IRL player).
+Enemies - (16x16) - left and right movement animations. In-air poses (left and right).
+Blocks - Solid and damaged, likely a screen character element.  Likey a 2x2 character.
+Treasures - also screen elements - also 2x2 characters.
+
+Level constructions:
+Procedural, should have reasonable long platforms, all open spaces should be reachable, 10 treasures are placed procedurally.  Note the player can damage blocks to get to things, maybe that should be part of the level construction concepts.
+
+Difficulty spiking:
+Enemies move half as fast as the player.  Every level they speed up to be 95% of the player speed at most.
+
+
+
