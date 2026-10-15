@@ -1,5 +1,6 @@
 ; Enemies (spec section 6): 5 enemies on sprites 1-5 with the shared actor physics, contact with the player
-; (kill, stomp, hit) and respawning with a warning flicker. The navigation AI (nav.p8) decides where to go.
+; (kill, stomp, hit), respawning with a warning flicker, and treasure carrying (pickup, drop, falling treasures).
+; The navigation AI (nav.p8) decides where to go.
 
 %import actors
 %import player
@@ -26,6 +27,8 @@ enemies {
     const ubyte RESPAWN_SECS = 10       ; at level 1, -1 per level
     const ubyte MIN_RESPAWN_SECS = 3
     const ubyte WARNING_FRAMES = 50
+    const ubyte PICKUP_COOLDOWN = 150   ; frames (3 s) an enemy that lost a treasure can't pick one up
+    const ubyte FALL_MASK = 3           ; a dropped treasure falls one tile on frames where (frame & 3) == 0
     const ubyte DECIDE_MASK = 7         ; enemy i may decide on frames where (frame & 7) == i, so one per frame
 
     const ubyte PLAYER_DIST = 8         ; spawn at least this far from the player (Manhattan, tiles)
@@ -55,6 +58,12 @@ enemies {
     ubyte[actors.COUNT] rise_left
     ubyte[actors.COUNT] respawn_timer   ; seconds left while DEAD; at 0 the enemy is picking its spawn spot
     ubyte[actors.COUNT] timer_frames    ; frames left in the current second (DEAD) or of the warning (WARNING)
+    ubyte[actors.COUNT] carrying        ; 0 = none, else 1 + treasure type
+    ubyte[actors.COUNT] cooldown        ; frames until it may pick up a treasure again
+
+    ; dropped treasures that haven't come to rest on a solid tile yet: tile map indices
+    ubyte[levelgen.TREASURES] falling
+    ubyte fall_count
 
     ; standing cells of the level (empty, solid tile below), listed at level start for spawn picks
     ubyte[levelgen.CELLS] spots
@@ -68,6 +77,8 @@ enemies {
     ubyte n_kills
     ubyte n_bonks
     ubyte n_hits
+    ubyte n_pickups
+    ubyte n_drops
 
     sub new_level(ubyte lvl) {
         level = lvl
@@ -84,6 +95,7 @@ enemies {
         ; Level start: list the standing cells, then spawn all enemies (with the warning flicker).
         ; Call after the level is generated and the player is at the start.
         ubyte idx
+        fall_count = 0
         spot_count = 0
         for idx in 0 to levelgen.CELLS - 1 {
             if video.tiles[idx] == video.T_EMPTY and video.tiles[idx + video.MAP_W] - 1 < 3 {
@@ -115,6 +127,8 @@ enemies {
         walk_dir[i] = DIR_NONE
         edge_mode[i] = EDGE_STOP
         jump_req[i] = false
+        carrying[i] = 0
+        cooldown[i] = 0
         nav.reset(i)
     }
 
@@ -220,6 +234,8 @@ enemies {
         ubyte i
 
         for i in FIRST to LAST {
+            if cooldown[i] != 0
+                cooldown[i]--
             when actors.state[i] {
                 DEAD -> {
                     if respawn_timer[i] == 0
@@ -246,7 +262,101 @@ enemies {
                         nav.steer(i)
                         move(i)
                     }
+                    if carrying[i] == 0 and cooldown[i] == 0
+                        pick_up(i)
                 }
+            }
+        }
+        if frame & FALL_MASK == 0 and fall_count != 0
+            fall_treasures()
+    }
+
+    ; ---- treasure carrying (spec section 6, treasure handling) ----
+    sub pick_up(ubyte i) {
+        ; Take the first treasure tile the box overlaps (up to 2 x 2 tiles).
+        ubyte left = lsb(actors.x[i] >> 4)
+        ubyte idx = video.row_start[actors.y[i] >> 4] + left
+        bool two_cols = lsb((actors.x[i] + actors.BOX_W - 1) >> 4) != left
+        if take(i, idx)
+            return
+        if two_cols and take(i, idx + 1)
+            return
+        if actors.y[i] & 15 != 0 {
+            idx += video.MAP_W
+            if take(i, idx)
+                return
+            if two_cols
+                void take(i, idx + 1)
+        }
+    }
+
+    sub take(ubyte i, ubyte idx) -> bool {
+        ubyte t = video.tiles[idx]
+        if t < video.T_TREASURE
+            return false
+        carrying[i] = t - video.T_TREASURE + 1
+        nav.hideout[i] = nav.NONE       ; pick a hideout at the next decision
+        video.tiles[idx] = video.T_EMPTY
+        video.draw_tile(levelgen.cell_col[idx], levelgen.cell_row[idx])
+        n_pickups++
+        return true
+    }
+
+    sub drop(ubyte i) {
+        ; Lose the carried treasure (stomp or kill): it goes into the tile at the box centre, or the nearest empty
+        ; tile above it, and falls from there (fall_treasures).
+        if carrying[i] == 0
+            return
+        ubyte t = video.T_TREASURE + carrying[i] - 1
+        carrying[i] = 0
+        cooldown[i] = PICKUP_COOLDOWN
+        n_drops++
+        ubyte idx = video.row_start[(actors.y[i] + actors.BOX_H / 2) >> 4] + col_of(i)
+        while video.tiles[idx] != video.T_EMPTY {
+            if idx < video.MAP_W {
+                ; the whole column above is taken: the first empty tile of the map instead
+                idx = 0
+                while video.tiles[idx] != video.T_EMPTY
+                    idx++
+                break
+            }
+            idx -= video.MAP_W
+        }
+        video.tiles[idx] = t
+        video.draw_tile(levelgen.cell_col[idx], levelgen.cell_row[idx])
+        if fall_count < len(falling) {
+            falling[fall_count] = idx
+            fall_count++
+        }
+    }
+
+    sub fall_treasures() {
+        ; Move each dropped treasure one tile down into an empty tile. One resting on a solid tile is done
+        ; (the hunters may target it from now on); one above another treasure waits until that cell is empty.
+        ; A treasure taken while falling (by the player or an enemy) leaves the list.
+        ubyte k = fall_count
+        while k != 0 {
+            k--
+            ubyte idx = falling[k]
+            ubyte t = video.tiles[idx]
+            bool done = t < video.T_TREASURE
+            if not done {
+                ubyte below = video.tiles[idx + video.MAP_W]
+                if below == video.T_EMPTY {
+                    video.tiles[idx] = video.T_EMPTY
+                    video.draw_tile(levelgen.cell_col[idx], levelgen.cell_row[idx])
+                    idx += video.MAP_W
+                    video.tiles[idx] = t
+                    video.draw_tile(levelgen.cell_col[idx], levelgen.cell_row[idx])
+                    falling[k] = idx
+                } else if below - 1 < 3 {
+                    nav.treasure_settled(idx)
+                    done = true
+                }
+            }
+            if done {
+                fall_count--
+                falling[k] = falling[fall_count]
             }
         }
     }
@@ -385,6 +495,7 @@ enemies {
                 kill(i)
             else if top_half and pst == player.FALLING {
                 n_bonks++
+                drop(i)
                 player.bounce(actors.y[i])
             } else if player.invuln_timer == 0 {
                 n_hits++
@@ -396,6 +507,7 @@ enemies {
 
     sub kill(ubyte i) {
         n_kills++
+        drop(i)
         actors.state[i] = DEAD
         respawn_timer[i] = respawn_secs
         timer_frames[i] = score.FRAMES_PER_SECOND
@@ -419,7 +531,8 @@ enemies {
                 spr = if left assets.SPR_ENEMY_WALK_L_0 else assets.SPR_ENEMY_WALK_R_0
             else
                 spr = if left assets.SPR_ENEMY_AIR_L_0 else assets.SPR_ENEMY_AIR_R_0
-            video.set_sprite(i, spr, video.ENEMY_COLOR, actors.x[i] - actors.BOX_INSET, actors.y[i])
+            ubyte color = if carrying[i] != 0 video.ENEMY_CARRY_COLOR else video.ENEMY_COLOR
+            video.set_sprite(i, spr, color, actors.x[i] - actors.BOX_INSET, actors.y[i])
         }
     }
 }

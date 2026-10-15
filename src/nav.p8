@@ -1,4 +1,5 @@
-; Navigation AI (spec section 6, phase 5b): platform map, routes between platforms, enemy roles.
+; Navigation AI (spec section 6, phases 5b and 6): platform map, routes between platforms, enemy roles and the
+; carrier role (an enemy holding a treasure flees to a hideout far from the player).
 ; The map is built after level generation. When a tile is destroyed it is rebuilt into a second table set in
 ; slices (build_step()) run at the end of frames with time left (idle_build()), and swapped in when complete;
 ; decisions use the front set meanwhile.
@@ -90,6 +91,12 @@ nav {
     ubyte[actors.COUNT] commit          ; frames left; no decisions while non-zero
     uword[actors.COUNT] land_x          ; jump: goal x once the box is above the target's tiles
     ubyte[actors.COUNT] land_y          ; jump: box y at or above which the sideways move starts
+
+    ; carrier role
+    const ubyte REPLAN_DECISIONS = 4    ; pick the hideout again every 4th decision (32 frames) ...
+    const ubyte NEAR_TILES = 5          ; ... or at every decision while the player is this close (Manhattan)
+    ubyte[actors.COUNT] hideout         ; platform id in the front set, NONE = pick one at the next decision
+    ubyte[actors.COUNT] replan          ; decisions left until the hideout is picked again
 
     ; self-test and debug readout
     bool no_mistakes
@@ -221,6 +228,7 @@ nav {
     }
 
     sub swap_sets() {
+        sys.memset(&hideout, len(hideout), NONE)    ; platform ids change with the map
         front ^= 1
         f_pof = b_pof
         f_next = b_next
@@ -434,6 +442,26 @@ _store
         return false
     }
 
+    sub treasure_settled(ubyte idx) {
+        ; A dropped treasure came to rest at tile map index idx: list it for the hunters, in the slot of a
+        ; treasure that is gone if there is one.
+        ubyte k = 0
+        ubyte free = NONE
+        while k != tr_count {
+            if tr_cell[k] == idx
+                return
+            if free == NONE and video.tiles[tr_cell[k]] < video.T_TREASURE
+                free = k
+            k++
+        }
+        if free != NONE
+            tr_cell[free] = idx
+        else if tr_count < len(tr_cell) {
+            tr_cell[tr_count] = idx
+            tr_count++
+        }
+    }
+
     ; ---- lookups in the front set ----
     sub platform_at(ubyte idx) -> ubyte {
         return @(f_pof + idx)
@@ -481,6 +509,10 @@ _store
         ubyte e = platform_under(actors.x[i], actors.y[i], true)
         ubyte t = platform_under(px, actors.y[0], actors.state[0] == player.GROUNDED)
         uword tx = px
+        if enemies.carrying[i] != 0 {
+            carry_decide(i, e, t)
+            return
+        }
         when role[i] {
             AMBUSHER -> {
                 ; the end of the player's platform in the player's facing direction (airborne: landing platform)
@@ -494,6 +526,7 @@ _store
             HUNTER -> {
                 ; the nearest platform (by hops) with a free treasure, else the player's platform
                 if e != NONE {
+                    ^^ubyte @zp hrow = f_hops + ((e as uword) << 5)
                     ubyte best = NONE
                     ubyte k = 0
                     while k != tr_count {
@@ -502,7 +535,7 @@ _store
                         if video.tiles[idx] >= video.T_TREASURE {
                             ubyte q = @(f_pof + idx)
                             if q != NONE {
-                                ubyte h = hops(e, q)
+                                ubyte h = hrow[q]
                                 if h < best {
                                     best = h
                                     t = q
@@ -540,6 +573,74 @@ _store
         } else
             n_routes++
         take_link(i, l)
+    }
+
+    sub carry_decide(ubyte i, ubyte e, ubyte p) {
+        ; Carrier: head for the hideout, or keep away from the player on it. e = its platform, p = the player's.
+        dbg_plat[i] = e
+        if e == NONE {
+            wander(i)
+            return
+        }
+        if p != NONE {
+            ubyte dc = abs_diff(enemies.col_of(0), enemies.col_of(i))
+            ubyte dr = abs_diff((actors.y[0] + actors.BOX_H / 2) >> 4, (actors.y[i] + actors.BOX_H / 2) >> 4)
+            if p == e or dc + dr <= NEAR_TILES or hideout[i] == NONE or replan[i] == 0 {
+                hideout[i] = find_hideout(e, p)
+                replan[i] = REPLAN_DECISIONS
+            }
+            replan[i]--
+        }
+        ubyte h = hideout[i]
+        ubyte l = NONE
+        if h != NONE and h != e
+            l = next_link(e, h)
+        dbg_target[i] = h
+        if l == NONE {
+            ; at the hideout (or no hideout yet): go to the end of the platform away from the player
+            go_to(i, e, if actors.x[0] < actors.x[i] 319 else 0)
+            return
+        }
+        if not no_mistakes and math.rnd() & 63 < mistake_rate() {
+            l = plat_link[fp + e] + levelgen.rand_below(plat_nlinks[fp + e])
+            n_mistakes++
+        } else
+            n_routes++
+        take_link(i, l)
+    }
+
+    sub find_hideout(ubyte e, ubyte p) -> ubyte {
+        ; The platform reachable from e with the most hops from the player's platform p (no route from p counts
+        ; as farthest). Ties go to platforms with more than one outgoing link, then to fewer hops from e (so a
+        ; carrier already at an equally good hideout stays). Leaves out p itself and any platform whose route
+        ; from e starts with a link onto p. Returns e when nothing qualifies.
+        ^^ubyte @zp hrow_e = f_hops + ((e as uword) << 5)
+        ^^ubyte @zp nrow_e = f_next + ((e as uword) << 5)
+        ^^ubyte @zp hrow_p = f_hops + ((p as uword) << 5)
+        ubyte best = NONE
+        ubyte best_h = 0
+        bool best_multi = false
+        ubyte best_he = 0
+        ubyte q
+        for q in 0 to f_count - 1 {
+            if q == p or hrow_e[q] == NONE
+                continue
+            if q != e and link_to[nrow_e[q]] == p
+                continue
+            ubyte h = hrow_p[q]
+            bool multi = plat_nlinks[fp + q] > 1
+            ubyte he = hrow_e[q]
+            if best == NONE or h > best_h
+                    or (h == best_h and (multi and not best_multi or (multi == best_multi and he < best_he))) {
+                best = q
+                best_h = h
+                best_multi = multi
+                best_he = he
+            }
+        }
+        if best == NONE
+            return e
+        return best
     }
 
     sub nearest_reachable(ubyte e, ubyte t) -> ubyte {
@@ -634,6 +735,7 @@ _store
         ; At spawn: stand until the first decision.
         plan[i] = PLAN_STAND
         commit[i] = 0
+        hideout[i] = NONE
         enemies.goal_on[i] = false
     }
 

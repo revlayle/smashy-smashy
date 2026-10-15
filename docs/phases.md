@@ -252,7 +252,7 @@ Done when:
 - Code+data `$0801-$46b4`, BSS and slabs to `$63F0`. No `floats` import. 24 compiler warnings, all "always true/false" or constant `when` from switches.
 
 ## Phase 6: Treasure carrying
-**Status:** not started
+**Status:** done
 **Spec:** §6 treasure handling and carrier role
 
 Build:
@@ -261,12 +261,35 @@ Build:
 - Level completion still counts only treasures the player collects.
 
 Done when:
-- [ ] Screenshot: an enemy that walked over a treasure has the carry color and the treasure tile is gone.
-- [ ] Scripted test: stomp a carrier → treasure reappears and settles on a platform.
-- [ ] A treasure dropped where the cell is occupied lands in the nearest free cell above.
-- [ ] Scripted test: player approaches a carrier → the carrier moves away (its `hops` from the player's platform goes up, or it leaves the player's platform).
-- [ ] Scripted test: bonk a carrier → it does not re-take the dropped treasure within 3 s.
-- [ ] Report lists feel items for the designer: is a carrier catchable, how long a chase takes.
+- [x] Screenshot: an enemy that walked over a treasure has the carry color and the treasure tile is gone.
+- [x] Scripted test: stomp a carrier → treasure reappears and settles on a platform.
+- [x] A treasure dropped where the cell is occupied lands in the nearest free cell above.
+- [x] Scripted test: player approaches a carrier → the carrier moves away (its `hops` from the player's platform goes up, or it leaves the player's platform).
+- [x] Scripted test: bonk a carrier → it does not re-take the dropped treasure within 3 s.
+- [x] Report lists feel items for the designer: is a carrier catchable, how long a chase takes.
+
+**Notes:**
+- `enemies.p8`: `carrying` (0 or 1 + type) and `cooldown` (frames) per enemy, reset at spawn. Any active enemy (also while frozen in tests) that isn't carrying and has no cooldown takes the first treasure tile its box overlaps (`pick_up`, up to 2 x 2 tiles): tile cleared and redrawn, sprite in `ENEMY_CARRY_COLOR`. A stomp or kill calls `drop()` first: cooldown 150 frames, treasure into the tile at the box centre or the nearest empty tile above it. If the whole column above is taken, it goes into the first empty tile of the map (never seen; it keeps the treasure count intact).
+- Dropped treasures are ordinary treasure tiles plus a list (`enemies.falling`, up to 10). Every 4th frame each one moves one tile down into an empty tile. On a solid tile it is done and `nav.treasure_settled()` lists it for the hunters (reusing the slot of a treasure that is gone). On top of another treasure it waits and falls on once that cell is empty. The player and enemies can take a treasure while it falls; it then leaves the list.
+- Carrier role (`nav.carry_decide`, `find_hideout`): the hideout is picked again when the player is within 5 tiles (Manhattan, box-centre cells) or on the carrier's platform, every 4th decision otherwise (32 frames), after it picks up a treasure, and after every map rebuild (ids change). Implementation choices (spec §6 updated):
+  - Hideout ties: more than one outgoing link first, then fewer hops from the carrier, so a carrier already at an equally good hideout stays. Without the second tie-break the TEST 18 carrier left a 2-hop floor hideout for another 2-hop platform by way of a 1-hop one.
+  - "No route from the player's platform" counts as the farthest.
+  - At the hideout (or when nothing qualifies) the carrier walks to the end of its platform away from the player.
+  - Mistakes apply to carriers too (rolled per link choice as for every role), so a carrier can occasionally take a link toward the player.
+  - Only the first link of the route is checked against the player's platform (as the spec says); a longer route may still pass it. A carrier on the player's platform may also walk past the player to reach its take-off column.
+- Hunters: the hops row is read through a pointer instead of a `hops()` call per treasure. With treasures on the map (the 5b frame-budget tests had removed them) a hunter decision plus an enemy pickup in the same frame measured 275 lines; now 261.
+- Not added: a resting treasure losing the tile under it. Only the player destroys tiles, and a fast-fall drills through the cell above the tile, so a treasure there is always collected first.
+- Observation for play: the drop goes to the enemy's centre cell. After a stomp on a grounded carrier the player's next bounce comes down into that cell and collects the treasure. After a stomp or kill in the air the player's box usually already overlaps the cell. So stomping a carrier usually hands the treasure straight to the player.
+- Verified with scripted tests on the fallback layout (`levelgen.FORCE_FAIL`, fixed seed, switches off again in the handed-over build). Readout on char rows 1-2 (`main.carry_hud`):
+  - TEST 15 (pickup): a hunter walks along the row-4 platform over a treasure at column 12: carrying = 5 (type 4), tile gone, yellow sprite. It then flees to the upper left platform (the player waits at the bottom left).
+  - TEST 16 (stomp in the air): a frozen carrier at row 2, column 10. Bonk at frame 12, the treasure appears at (10, 2), falls and rests at (10, 4) on the row-5 platform; falling list empty, enemy red again.
+  - TEST 21 (kill in the air): same setup with down held: kill (+200) and drop; the player's fall catches the treasure on the way (+100).
+  - TEST 17 (occupied cell): a carrier standing on a treasure at (10, 4) drops at frame 25: the dropped treasure goes to (10, 3) and waits. The test removes (10, 4) at frame 100, and the dropped one falls into it.
+  - TEST 18 (carrier flees): a carrier on the upper right platform, the player climbs there (the TEST 10 route). As soon as the player lands on the row-4 platform (1 hop away) the carrier walks off right and down to the floor (2 hops from the player's final platform), at the floor's far end. It never stood on the player's platform while the player was there. With the tie-break it stays there (checked to 18 s).
+  - TEST 19 (cooldown): the player bonks a frozen carrier on the row-4 platform and drifts right during the bounce. The treasure drops at frame 20 into the enemy's own cell; the enemy stands on it and takes it back at frame 170 (150 frames later). TEST 17 shows the same: drop at 25, retaken at 175.
+- Frame budget (`FRAME_STATS`, as in 5a/5b; TEST 7, 8 and 12 now keep the treasures, so pickups, carriers and hunters with targets are in the measure; new TEST 20 = TEST 7 with all 5 enemies carrying from the start): TEST 7 261 lines, TEST 8 255, TEST 12 261, TEST 20 241, 0 dropped frames in all. TEST 7/8/20 use the short HUD readout when `FRAME_STATS` is on (the long one ran after the measure and made the next frame start late). The TEST 12 worst frame is a map rebuild slice (same as 5b); the TEST 7 one is an enemy decision plus a pickup.
+- Regression: TEST 2 (kill chain, 600 points), TEST 4 (hit), TEST 10 (chaser arrives at frame 545, 7 route decisions, as in 5b) and TEST 9 (20 levels, 438 links, 0 failures, 0 timeouts, 0 frames inside a tile) unchanged.
+- Code+data `$0801-$4D8D`, BSS and slabs to `$6B18`. No `floats` import. 30 compiler warnings, all "always true/false", constant `when` or a zero-iteration loop from switches.
 
 ## Phase 7: Game flow and difficulty
 **Status:** not started

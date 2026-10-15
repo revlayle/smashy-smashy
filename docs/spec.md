@@ -160,6 +160,8 @@ Decisions at most every 8 frames per enemy, staggered so at most one enemy decid
 
 **Measured after phase 5b** (same method): worst frame 202 lines with 5 live enemies (TEST 7 and 8), 247-253 lines with 5 live enemies while the player drills and the map is rebuilt; 0 dropped frames.
 
+**Measured after phase 6** (same method, now with treasures on the map): 255-261 lines with 5 live enemies, pickups and carriers; 241 with 5 carriers; 261 while drilling with rebuilds; 0 dropped frames.
+
 **Platform map.** Built after level generation, kept in program RAM (BSS and `memory()` slabs, about 6 KB for both table sets):
 - A **platform** is a maximal horizontal run of standing cells (a non-solid cell, empty or treasure, above solid/damaged/floor) on one row. Max 32 platforms; extras are ignored (treated as unreachable). `platform_of[220]` maps each cell to its platform (255 = none). Ids are given in row order, top to bottom.
 - **Links** from platform P, each storing the take-off column, the kind (walk off or jump, left or right) and the target platform:
@@ -186,16 +188,17 @@ Decisions at most every 8 frames per enemy, staggered so at most one enemy decid
 | 4, 5 | Hunter | the nearest platform with a free treasure (by `hops`), else the player's platform. Until pickup exists (phase 6) a hunter walks to the treasure and stands on it. |
 
 **Carrier.** An enemy holding a treasure switches to the carrier role, whatever its slot:
-- Target is the **hideout**: the platform with the largest `hops` from the player's platform, reachable from the carrier's current platform. Ties go to platforms with more than one outgoing link (avoids dead ends).
-- Re-plan when the player is within 5 tiles (Manhattan) or on the carrier's platform, and every 32 frames otherwise.
-- A carrier never moves toward the player on purpose. If its next link would bring it onto the player's platform, it picks the next-best hideout.
+- Target is the **hideout**: the platform with the largest `hops` from the player's platform, reachable from the carrier's current platform. No route from the player's platform counts as the largest. Ties go to platforms with more than one outgoing link (avoids dead ends), then to fewer hops from the carrier (a carrier already at an equally good hideout stays).
+- Re-plan (pick the hideout again) when the player is within 5 tiles (Manhattan) or on the carrier's platform, and every 32 frames (every 4th decision) otherwise; also right after a pickup and after a map rebuild. Route following between re-plans uses the normal 8-frame decisions.
+- At the hideout, the carrier walks to the end of its platform away from the player.
+- A carrier never moves toward the player on purpose. If its next link would bring it onto the player's platform, it picks the next-best hideout. (Only the first link is checked. Mistakes apply to carriers as to every role.)
 - **Contact:** touching a carrier from the side hits the player like any enemy. The treasure only comes loose by a stomp or a fast-fall kill.
 - When it loses the treasure, the enemy returns to its slot's role.
 
 ### Treasure handling
 - An enemy that just lost a treasure can't pick one up for 3 s (`pickup_cooldown`), so the player has a fair chance to grab it.
 - Not carrying, no cooldown, and the box overlaps a treasure tile → pick it up (tile cleared, `carrying = 1 + type`). Shown by a color change: a carrying enemy uses `ENEMY_CARRY_COLOR` instead of `ENEMY_COLOR` (sprite color register $D027+n). No extra frames.
-- Dropping: the treasure is placed in the tile at the enemy's centre, or the nearest empty tile above it, then falls one tile every 4 frames until it rests on a solid tile.
+- Dropping: the treasure is placed in the tile at the enemy's centre, or the nearest empty tile above it, then falls one tile every 4 frames until it rests on a solid tile. On top of another treasure it waits and falls on once that cell is empty. A falling treasure is an ordinary treasure tile, so the player or an enemy can take it on the way.
 
 ### Respawn
 - Destroyed enemy → `respawn_timer = max(10 - (level - 1), 3)` seconds. **[TUNE]**

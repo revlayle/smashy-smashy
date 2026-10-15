@@ -32,8 +32,8 @@ main {
     ; clock (ticked by the frame IRQ) counts the whole frames that passed.
     const bool FRAME_STATS = false
     ; Self-test scenario (0 = off). Sets up enemies and the input script after each level load and shows a
-    ; readout on char row 1 (see test_setup and test_hud). Needs input.SCRIPTED; 2-6 and 10-11 need
-    ; levelgen.FORCE_FAIL, 7-8 (frame budget) need FRAME_STATS. 9 (link replay) needs neither.
+    ; readout on char row 1 (see test_setup and test_hud). Needs input.SCRIPTED; 2-6, 10-11 and 15-21 need
+    ; levelgen.FORCE_FAIL, 7-8, 12 and 20 (frame budget) need FRAME_STATS. 9 (link replay) needs neither.
     const ubyte TEST = 0
     const ubyte LINK_LEVELS = 20        ; TEST 9: levels to check
     const ubyte LINK_HOLES = 0          ; TEST 9: random platform tiles destroyed in each level before the check
@@ -303,8 +303,9 @@ main {
             return
         }
         ubyte idx
+        bool budget = TEST == 7 or TEST == 8 or TEST == 12 or TEST == 20     ; these keep the treasures
         for idx in 0 to levelgen.CELLS - 1 {
-            if video.tiles[idx] >= video.T_TREASURE {
+            if not budget and video.tiles[idx] >= video.T_TREASURE {
                 video.tiles[idx] = video.T_EMPTY    ; no treasure points in the score checks
                 video.draw_tile(levelgen.cell_col[idx], levelgen.cell_row[idx])
             }
@@ -371,6 +372,60 @@ main {
                 enemies.place_all()
                 enemies.frozen = false
                 input.script = &script_drill_stress
+            }
+            20 -> {
+                ; frame budget with carriers: like 7, but every enemy starts carrying a treasure
+                enemies.place_all()
+                enemies.frozen = false
+                for i in enemies.FIRST to enemies.LAST
+                    enemies.carrying[i] = 1
+                input.script = &script_stress
+            }
+            15 -> {
+                ; pickup: one treasure on the row-4 platform at column 12. Enemy 4 (hunter) starts on that
+                ; platform at column 5 and walks over it. The player waits on the floor at the far left.
+                test_tile(12, 4, video.T_TREASURE + 4)
+                nav.new_level()
+                test_put(4, 5 * 16 + 2, 64, enemies.GROUNDED)
+                test_put(0, 2, 160, player.GROUNDED)
+                enemies.frozen = false
+                nav.no_mistakes = true
+                input.script = &script_none
+            }
+            16, 21 -> {
+                ; stomp (16) or fast-fall kill (21) on a carrier held in the air at row 2, column 10. The drop
+                ; falls from (10, 2) to the row-4 platform.
+                test_put(1, 154, 32, enemies.GROUNDED)
+                enemies.carrying[1] = 1
+                input.script = if TEST == 16 &script_none else &script_down
+            }
+            17 -> {
+                ; occupied drop cell: a carrier stands on a treasure at (10, 4). At frame 25 it drops its own
+                ; treasure (as if stomped), which goes to (10, 3). At frame 100 the treasure at (10, 4) is removed
+                ; (as if collected), so the dropped one falls into its place. The player waits on the floor.
+                test_put(1, 154, 64, enemies.GROUNDED)
+                enemies.carrying[1] = 1
+                test_tile(10, 4, video.T_TREASURE + 9)
+                test_put(0, 2, 160, player.GROUNDED)
+                input.script = &script_none
+            }
+            18 -> {
+                ; carrier flees: enemy 1 carries a treasure on the upper right platform (row 1, columns 13-18).
+                ; The player climbs up to it (the TEST 10 route).
+                test_put(1, 17 * 16 + 2, 16, enemies.GROUNDED)
+                enemies.carrying[1] = 1
+                enemies.frozen = false
+                nav.no_mistakes = true
+                track = 1
+                input.script = &script_climb
+            }
+            19 -> {
+                ; pickup cooldown: the player falls onto a frozen carrier on the row-4 platform, then drifts right
+                ; during the bounce and walks away. The drop lands in the enemy's own cell, so it could take it
+                ; back at once; the cooldown stops it for 3 s.
+                test_put(1, 154, 64, enemies.GROUNDED)
+                enemies.carrying[1] = 1
+                input.script = &script_bonk_away
             }
             10 -> {
                 ; chaser route: the player climbs to the upper right platform (row 1, columns 13-18) and waits.
@@ -752,6 +807,113 @@ main {
         }
     }
 
+    sub test_tile(ubyte col, ubyte row, ubyte t) {
+        video.tiles[video.row_start[row] + col] = t
+        video.draw_tile(col, row)
+    }
+
+    ; ---- TEST 15-21 readout: treasure carrying ----
+    ubyte[] script_down = [60, input.DOWN, 0, 0]
+    ubyte[] script_bonk_away = [19, 0, 40, input.RIGHT, 0, 0]
+    uword carry_frames
+    uword first_drop                    ; frame of the first drop
+    uword retake                        ; frame of the first pickup after the first drop
+    ubyte last_pickups
+    ubyte max_hops                      ; TEST 18: most hops from the player's platform to the carrier's
+    ubyte on_player_plat                ; TEST 18: frames the carrier stood on the player's platform
+
+    sub carry_hud() {
+        ; Row 1: c=carrying of enemies 1-5, d=drops, u=pickups, f=falling treasures, a=frame of the first drop,
+        ; r=frame of the first pickup after it, z=frame count.
+        ; Row 2: t=tiles at (10, 2), (10, 3), (10, 4), k=kills, b=bonks, p=score (BCD hundreds),
+        ; n=enemy 1 cooldown, s=player state.
+        ; TEST 18 adds to the route readout, row 3: c, d, u, f as above, h=hops from the player's platform to
+        ; the carrier's, m=most seen, o=frames the carrier stood on the player's platform (player grounded),
+        ; q=its hideout, e=its platform.
+        carry_frames++
+        if TEST == 17 {
+            if carry_frames == 25
+                enemies.drop(1)
+            if carry_frames == 100
+                test_tile(10, 4, video.T_EMPTY)
+        }
+        if enemies.n_drops != 0 and first_drop == 0
+            first_drop = carry_frames
+        if enemies.n_pickups != last_pickups {
+            last_pickups = enemies.n_pickups
+            if first_drop != 0 and retake == 0
+                retake = carry_frames
+        }
+        ubyte base = 0
+        if TEST == 18 {
+            route_hud()
+            base = 80
+            ubyte e = nav.NONE
+            if actors.state[1] == enemies.GROUNDED
+                e = nav.platform_under(actors.x[1], actors.y[1], true)
+            ubyte p = nav.platform_under(actors.x[0], actors.y[0], actors.state[0] == player.GROUNDED)
+            ubyte h = nav.NONE
+            if e != nav.NONE and p != nav.NONE {
+                h = nav.hops(p, e)
+                if h != nav.NONE and h > max_hops
+                    max_hops = h
+                if e == p and actors.state[0] == player.GROUNDED
+                    on_player_plat++
+            }
+            test_text(base + 20, sc:"h")
+            test_hex(base + 21, h)
+            test_text(base + 24, sc:"m")
+            test_hex(base + 25, max_hops)
+            test_text(base + 28, sc:"o")
+            test_hex(base + 29, on_player_plat)
+            test_text(base + 32, sc:"q")
+            test_hex(base + 33, nav.hideout[1])
+            test_text(base + 36, sc:"e")
+            test_hex(base + 37, e)
+            sys.memset(video.COLOR_RAM + 40 + base, 40, video.COLOR_HUD)
+        } else {
+            sys.memset(video.COLOR_RAM + 40, 80, video.COLOR_HUD)
+            if carry_frames == 1
+                sys.memset(video.SCREEN + 40, 80, video.CHAR_SPACE)
+        }
+        test_text(base + 0, sc:"c")
+        ubyte i
+        for i in enemies.FIRST to enemies.LAST
+            @(video.SCREEN + 40 + base + i) = hex_char(enemies.carrying[i])
+        test_text(base + 7, sc:"d")
+        test_hex(base + 8, enemies.n_drops)
+        test_text(base + 11, sc:"u")
+        test_hex(base + 12, enemies.n_pickups)
+        test_text(base + 15, sc:"f")
+        test_hex(base + 16, enemies.fall_count)
+        if TEST == 18
+            return
+        test_text(19, sc:"a")
+        test_hex(20, msb(first_drop))
+        test_hex(22, lsb(first_drop))
+        test_text(25, sc:"r")
+        test_hex(26, msb(retake))
+        test_hex(28, lsb(retake))
+        test_text(31, sc:"z")
+        test_hex(32, msb(carry_frames))
+        test_hex(34, lsb(carry_frames))
+        test_text(40, sc:"t")
+        test_hex(41, video.tiles[video.row_start[2] + 10])
+        test_hex(43, video.tiles[video.row_start[3] + 10])
+        test_hex(45, video.tiles[video.row_start[4] + 10])
+        test_text(48, sc:"k")
+        test_hex(49, enemies.n_kills)
+        test_text(52, sc:"b")
+        test_hex(53, enemies.n_bonks)
+        test_text(56, sc:"p")
+        test_hex(57, msb(score.points))
+        test_hex(59, lsb(score.points))
+        test_text(62, sc:"n")
+        test_hex(63, enemies.cooldown[1])
+        test_text(66, sc:"s")
+        test_hex(67, actors.state[0])
+    }
+
     sub test_put(ubyte i, uword px, ubyte py, ubyte st) {
         actors.x[i] = px
         actors.y[i] = py
@@ -760,9 +922,11 @@ main {
     }
 
     sub test_hud() {
-        if TEST == 12 {
-            ; no readout (it would take too long here): HUD cols 30-35 = map rebuilds, dropped frames
-            player.invuln_timer = 8
+        if TEST == 12 or (FRAME_STATS and (TEST == 7 or TEST == 8 or TEST == 20)) {
+            ; no readout (it would take too long here, and the next frame would start late): HUD cols 30-35 =
+            ; map rebuilds, dropped frames, col 26 = slowest rebuild in frames
+            if TEST == 12
+                player.invuln_timer = 8
             hex_byte(30, nav.rebuilds)
             hex_byte(33, video.late_frames)
             hex_byte(26, nav.slowest_build)
@@ -770,6 +934,10 @@ main {
         }
         if TEST == 10 or TEST == 11 {
             route_hud()
+            return
+        }
+        if TEST >= 15 and TEST <= 21 and TEST != 20 {
+            carry_hud()
             return
         }
         ; char row 1: s=player state y=player y c=chain i=invuln frames k/b/h=kills, bonks, hits
