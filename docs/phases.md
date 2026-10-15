@@ -10,6 +10,7 @@ Implementation plan for `docs/spec.md`. Work one phase at a time, in order. Each
 4. Verify every "Done when" item (see **Verification** below). Fix until all pass.
 5. Set the status to `done`. Under the phase, add a short **Notes** list: deviations from the spec, tuned values, known issues. If a decision changed, update `docs/spec.md` too.
 6. Stop and report to the designer. Don't start the next phase without their go-ahead; they will want to play each build.
+7. When the designer approves the phase, commit it on `main` with a message like `Phase N: <title>`, summarizing what was built. Don't commit before approval. If a phase goes badly, `git diff` and `git restore` against the last phase commit are the way back.
 
 If the spec is ambiguous or wrong for something the phase needs, ask the designer. Don't guess on gameplay. For pure implementation details, pick one and record it in Notes.
 
