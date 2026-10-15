@@ -255,7 +255,14 @@ TITLE --fire--> NEW_GAME --> LEVEL_START (READY?) --> PLAYING
 PLAYING --10 treasures--> LEVEL_COMPLETE --> LEVEL_START (READY?, level+1, +60 s)
 PLAYING --time 0--> GAME_OVER --fire--> TITLE
 ```
-- **TITLE**: shows the game's name, **SMASHY SMASHY**, "PRESS FIRE", and the session high score. Needed to seed the RNG and to restart. Can stay simple: hi-res text from the HUD font (chars 0-63 are the ROM screen codes, so all letters are available).
+- **TITLE**: needed to seed the RNG and to restart.
+  - **Big title:** SMASHY SMASHY in block letters, one solid block char (full 8x8, add it to the charset) per letter pixel, 5 chars tall. Two lines, "SMASHY" each, the second shifted right (about 25 chars wide each, rows ~3-7 and ~9-13).
+    - The letter shapes are a table of strings in the title code (`#` = block, `.` = empty, 5 rows per letter), so they're easy to redraw.
+    - Letters are 3 wide except M (5 wide), with 1 column of space between letters.
+  - **Character mode:** the title screen uses standard (hi-res) character mode ($D016 bit 4 off) so title blocks can use all 16 colours. Multicolour mode limits single-colour cells to colours 0-7. Gameplay switches multicolour back on.
+  - **Smash-in intro:** when the title screen opens, the 12 letters drop in from above the screen one after another (about 4 frames apart), falling at about 1 char row per frame. Each landing shakes the screen for about 8 frames: alternate the vertical fine scroll ($D011 bits 0-2) between its normal value and 2 px lower. **[TUNE]**
+  - **Rainbow sweep:** after the intro, title block colours cycle every 2 frames through a 16-entry colour table (e.g. 9, 2, 8, 10, 15, 7, 1, 1, 7, 15, 10, 8, 2, 9, 6, 6). Each block's index is `(column + row + phase) & 15`, so the colour bands roll diagonally. Only colour RAM changes; the screen codes stay put. **[TUNE]**
+  - **Text:** "PRESS FIRE" (blinking about once per second) and "HIGH SCORE 000000", hi-res text from the HUD font (chars 0-63 are the ROM screen codes). Fire starts a new game (edge-triggered, so the fire press that ended the last game doesn't start one).
 - **Pause**: Run/Stop toggles pause during PLAYING (edge-triggered, press again to resume). Everything freezes, including the timer; "PAUSED" is shown. Ignored during transitions.
 - **LEVEL_COMPLETE**: enemies vanish. Non-floor tiles are erased in random order, ~8 tiles per frame (about 1 s). The player floats to the start.
 - **LEVEL_START** ("READY?" pause), used for every level including the first:
@@ -378,4 +385,5 @@ None at the moment.
 
 Ideas for after phase 8, not scheduled:
 - Saved high-score list (to disk), with name entry.
+- Title screen extras: every few seconds the player sprite fast-falls onto a random title letter, its blocks crack (damaged look) and repair after a moment; and/or a strip at the bottom where the player and an enemy (or a carrier) chase each other.
 - Treasures enclosed by platforms, reachable only by drilling ("drill pockets", §7).
