@@ -161,17 +161,19 @@ Max speed stays under 16 px/f, so collision never tunnels through a tile.
 Grid is 20 x 12. Row 11 = floor. The spawn zone (columns 8-11, rows 0-1) is kept clear.
 
 ### Platform layout
-1. Shelf bands at base rows 2, 5 and 8 (3 tiles apart), each platform jittered ±1 row. The worst case after jitter is a 5-tile gap, which the player's 96 px jump still clears. Enemies (3-tile climb) can use every un-jittered gap, so they can always work their way upward somewhere unless the player drills the route away (intended: trapping enemies below is a strategy).
+1. Shelf bands at base rows 2, 5 and 8 (3 tiles apart), each platform jittered ±1 row. A band-2 platform jittered to row 1 that would overlap columns 8-11 stays at row 2 (spawn zone). The worst case after jitter is a 5-tile gap, which the player's 96 px jump still clears. Enemies (3-tile climb) can use every un-jittered gap, so they can always work their way upward somewhere unless the player drills the route away (intended: trapping enemies below is a strategy).
 2. Each band gets 2-4 platform segments, 3-8 tiles long, with gaps of 2+ tiles so the player can jump up through them.
-3. Each band must contain at least one platform within 3 tiles above some platform in the band below (horizontally within 3 columns), so enemies have a way up. No stair ledges needed.
+3. Each band must contain at least one platform within 3 tiles above some platform in the band below (horizontally within 3 columns), so enemies have a way up. No stair ledges needed. "Within 3 columns" means the column ranges overlap or the gap between them is at most 3 columns. The bottom band's partner is the floor (a platform at row 8 or 9). A layout that fails this counts as a failed attempt.
 
 ### Validation
 - BFS over "standing cells" (empty cell with solid/damaged/floor below), starting from where the player lands below the spawn point. Edges: walk left/right, fall off edges (falls straight down), jump (up to 5 tiles up, landing within 3 columns).
+  - Jump model: rise straight up k rows (1-5) in the start column, then move up to 3 columns sideways along row r - k. Every cell on that path must be empty. With k = 1 the jump can also land across a gap on the start row. This is a simplified, conservative model of the real arc: it can miss some jumps the player can make, but every jump it accepts is possible.
 - Regenerate if fewer than 30 standing cells are reachable, or if any treasure cell is unreachable. After 10 failures, use a fixed fallback layout.
 - Drilling makes everything below the player reachable anyway. Validation guarantees the player can also get back up.
+- Designer: a treasure that occasionally needs drilling to reach is fine, so a missed or wrong jump in the model is not a bug to chase.
 
 ### Treasures
-- 10 per level, each on a standing cell, at least 3 tiles from any other treasure, not in the spawn zone.
+- 10 per level, each on a reachable standing cell, at least 3 tiles from any other treasure (`|dcol| >= 3` or `|drow| >= 3`), not in the spawn zone, and not on the cell where the player lands from the spawn point (it would be collected on arrival).
 - Type choice: `t = min(14, (level - 1) + randrange(5))`. Early levels give 100-500 pts, and values climb by level. From level 11 on, every treasure is the top type.
 - Optional later: 1-2 treasures enclosed by platforms, reachable only by drilling ("drill pockets"), as hinted in the design.
 
@@ -179,7 +181,10 @@ Grid is 20 x 12. Row 11 = floor. The spawn zone (columns 8-11, rows 0-1) is kept
 5 enemies on random standing cells ≥ 8 tiles from the player start, at least 3 tiles apart.
 
 ### RNG
-`math.rnd()` / `math.randrange()`. Seeded once with `math.rndseed()` from the CIA1 timer and raster line at the moment fire is pressed on the title screen.
+`math.rnd()`, masked and retried for ranges (`levelgen.rand_below`; `math.randrange()` does a 16-bit multiply and is several times slower). Seeded once with `math.rndseed()` from the CIA1 timer and raster line at the moment fire is pressed on the title screen. Until the title screen exists (phase 7), it is seeded at startup.
+
+### Time
+Generation must finish within 50 frames. Measured: typical 4-9 frames; worst case (10 failed attempts, then the fallback) 40 frames.
 
 ## 8. Scoring and timer
 

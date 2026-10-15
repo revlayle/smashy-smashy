@@ -131,7 +131,7 @@ Done when:
 - Code+data `$0801-$1FEC`, BSS just after. No `floats` import. The compiler warnings are the 5 expected `const bool` ones.
 
 ## Phase 4: Level generator
-**Status:** not started
+**Status:** done
 **Spec:** §7
 
 Build:
@@ -139,9 +139,31 @@ Build:
 - Debug key (e.g. F1) regenerates the level instantly. Remove it or put it behind a switch at the end of the phase.
 
 Done when:
-- [ ] 10 consecutive generated levels (screenshots with different seeds) all have: full floor, clear spawn zone, 10 treasures on standing cells, no two treasures within 3 tiles.
-- [ ] Generation time measured (raster or frame count) and noted. Must finish within 50 frames.
-- [ ] A forced-failure test reaches the fallback layout without hanging.
+- [x] 10 consecutive generated levels (screenshots with different seeds) all have: full floor, clear spawn zone, 10 treasures on standing cells, no two treasures within 3 tiles.
+- [x] Generation time measured (raster or frame count) and noted. Must finish within 50 frames.
+- [x] A forced-failure test reaches the fallback layout without hanging.
+
+**Notes:**
+- `src/levelgen.p8`: `init()` once, `seed()`, `generate(level)` fills `video.tiles` (does not draw). The level is built as a segment list per band, then written to the tile map. An attempt fails on band connectivity (spec §7 rule 3), fewer than 30 reachable standing cells, or fewer than 10 treasures placed. After 10 failures it uses a fixed fallback layout (a segment table shaped like the phase 3 test level) and places treasures the same way.
+- The hand-made test level is gone from `main.p8`. Every level load and the level-complete placeholder now generate a new level (level number 1 for treasure types until phase 7).
+- Verified with self-test switches in `main.p8`, all `false` in the handed-over build:
+  - `GEN_STATS`: after each generation the HUD shows attempts (hex, +$80 = fallback), a `check_level()` result and the time in frames. `check_level()` checks: full floor, clear spawn zone, exactly 10 treasures, each on a standing cell and reachable, pairwise spacing, none on the start landing cell.
+  - `GEN_SOAK`: generates 200 levels at startup and shows fallbacks, most attempts, check failures and slowest time. Result: 0 fallbacks, at most 4-5 attempts, 0 failures, slowest 8-9 frames.
+  - 10 screenshots from 10 fixed seeds (temporary builds): all pass `check_level()`, 1-2 attempts, 4-5 frames each. Spawn zone and floor checked by eye too.
+  - `levelgen.FORCE_FAIL`: every attempt fails, so all 10 run in full and then the fallback. It ends with the fallback drawn, check result 0, in 40 frames (the worst case).
+  - A temporary reference BFS without the speed shortcuts (below) gave the same reachable set as `explore()` on 200 levels.
+- Timing (jiffy clock, 1 tick per frame through the frame IRQ): typical generation 4-9 frames, worst case 40. The first version took 120 frames in the worst case. Fixes:
+  - `rand_below()`: mask-and-retry on `math.rnd()`. `math.randrange()` does a 16-bit multiply (about 500 cycles).
+  - Standing cells are marked from the segment list instead of a scan of all 220 cells.
+  - Jump search shortcuts: a side isn't scanned while the neighbouring standing cell on that side has an equally clear column (its own jump covers the same targets). Rows with no standing cells aren't scanned, except for k = 1.
+  - Treasures: a walk through the reachable list from a random start with a random prime stride, then a plain scan. A placed treasure blocks the 5x5 cells around it, so the spacing check is one byte read.
+- Jump model in the BFS: rise straight up, then up to 3 columns sideways along the top row (spec §7). It is conservative: it can miss a diagonal jump the player could make, but never accepts an impossible one.
+- Treasure spacing is read as `|dcol| >= 3` or `|drow| >= 3`, so no other treasure is in the 5x5 square around one.
+- Added (not in the spec before, now in §7): no treasure on the cell where the player lands from the spawn point. Without this, the first test runs sometimes gave a free treasure on arrival.
+- Designer confirmed: the landing-cell rule, the 5x5 spacing reading, the jump model, and seeding at startup until phase 7.
+- Debug key F1 (`main.REGEN_KEY`, read with `cbm.GETIN2()`) generates a new level at once and keeps the score and timer. It is **on** in the handed-over build so the designer can browse levels. Checked with VICE `-keybuf` and a fixed seed: F1 changes the level; another key and a repeat run don't. Phase 8 removes it.
+- The RNG is seeded at startup from the CIA1 timer and raster line (placeholder until the title screen). Each VICE start can give a different first level.
+- Generator buffers are normal arrays in program RAM (about 1.1 KB of BSS), not the `$C400` game RAM area. Code+data `$0801-$2917`, BSS to `$2DD9`. No `floats` import. The compiler prints 8 "condition is always true/false" warnings, all from `const bool` switches.
 
 ## Phase 5: Enemies
 **Status:** not started
