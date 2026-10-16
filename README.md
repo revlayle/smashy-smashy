@@ -33,7 +33,7 @@ The build converts the art, compiles `src/main.p8` to `build/main.prg`, and `run
 - **Windows** is fully tested.
 - **Linux and macOS** need VICE and 64tass from your system: the setup script detects them, or tells you exactly what to install (Linux: the VICE Flatpak `net.sf.VICE`, and `build-essential` so it can build 64tass; macOS: `brew install vice tass64`). The Linux/macOS path is written but not yet tested.
 
-Just want to play? Grab `main.prg` from the [Releases](../../releases) page and open it in any C64 emulator, or on a real PAL C64.
+**Just want to play?** Download `smashy-smashy.prg` from the [latest release](https://github.com/revlayle/smashy-smashy/releases/latest) and open it in any C64 emulator (e.g. drag it onto VICE), or run it on a real PAL C64.
 
 ## Playing
 
