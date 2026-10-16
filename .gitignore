@@ -9,6 +9,11 @@
 /tools/prog8/
 /tools/prog8-src/
 /tools/vice/
+/tools/64tass/
+/tools/64tass-src/
+
+# C64 reference texts (copyrighted; downloaded by tools/setup.py)
+/docs/c64/
 
 # local Claude Code settings
 /.claude/settings.local.json

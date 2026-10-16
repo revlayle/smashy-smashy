@@ -1,6 +1,6 @@
 # Docs
 
-Project docs: `spec.md` (technical spec), `phases.md` (build plan and status), `session-prompts.md` (prompts for starting coding sessions).
+Project docs: `spec.md` (technical spec), `phases.md` (build plan and status), `session-prompts.md` (prompts for starting coding sessions), `development-story.md` (how the game was made).
 
 # Reference docs
 
