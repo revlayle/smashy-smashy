@@ -4,6 +4,9 @@ A single-screen platformer for the **Commodore 64**, designed by Rev. Layle and 
 
 Run, jump, and **smash down** through brick platforms to collect 10 treasures per level before the clock runs out. Enemies chase you, steal treasures and run off with them, and can be bonked or smashed for points. Every level is generated procedurally.
 
+> [!NOTE]
+> **All graphics are AI-generated placeholder art.** Every sprite, brick and treasure was drawn by Claude as text art, and the sound effects were designed by Claude too. Nothing here is final artwork. The art is meant to be replaced by a human, and that's easy: each image is a small grid of characters in a plain text file, rebuilt automatically. See [Changing the graphics](#changing-the-graphics).
+
 > **How was this made?** See [docs/development-story.md](docs/development-story.md): how a one-page design note became a spec, a phase plan and a series of AI coding sessions, and which tools made that work.
 
 <p>
@@ -48,6 +51,23 @@ Keyboard in VICE: arrow keys and left Ctrl (from `tools/vicerc`), or any gamepad
 Scoring: treasures 100-1500, smash chains as above, +2500 for finishing a level without destroying an enemy. Every level adds 60 s to the clock; getting hit costs 10 s. The game is over when time runs out.
 
 The game is built for PAL machines (50 Hz). On NTSC it runs about 20% faster.
+
+## Changing the graphics
+
+All art lives in two text files: `assets/sprites.txt` (player and enemies) and `assets/tiles.txt` (bricks, floor and the 15 treasures). Each picture is a grid of characters, one per pixel:
+
+```
+sprite player_run_r_0          tile solid color 2
+..3333..                       ...
+.311113.
+.322223.
+...
+```
+
+- **Symbols:** `.` = transparent (or background), `1` = the sprite's or tile's own colour, `2` and `3` = the two shared colours. The palette values are in `src/video.p8`.
+- **Size:** the game uses C64 multicolour mode, where pixels are double width, so a 16x16 sprite is 8 characters wide and 16 rows tall.
+- **Rebuilding:** edit the file, save, and rebuild (`build.cmd run` / `./build.sh run`). The converter (`tools/gfx.py`) turns the text into C64 graphics data and names each picture for the code, so redrawing a frame needs no code changes. The comments at the top of each file explain the rest, e.g. which animation frames belong together.
+- **Sound effects** are small tables of SID settings at the top of `src/sound.p8` (waveform, envelope, start pitch, pitch slide, length), one column per effect, so they can be retuned by changing numbers.
 
 ## Repository map
 
