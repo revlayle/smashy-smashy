@@ -19,7 +19,7 @@ main {
     const bool DEBUG_HUD = false
 
     ; Debug key: F1 generates a new level instantly (timer and score kept).
-    const bool REGEN_KEY = true
+    const bool REGEN_KEY = false
 
     ; Self-test: after each generation, HUD cols 0-1 = attempts in hex (+$80 = fallback layout),
     ; col 2 = level check result (0 = ok, see check_level), cols 38-39 = generation time in frames (hex).
@@ -33,7 +33,7 @@ main {
     ; counter (ticked by the frame IRQ) counts the whole frames that passed.
     const bool FRAME_STATS = false
     ; Self-test scenario (0 = off). Sets up enemies and the input script after each level load and shows a
-    ; readout on char row 1 (see test_setup and test_hud). Needs input.SCRIPTED; 2-6, 10-11 and 15-21 need
+    ; readout on char row 1 (see test_setup and test_hud). Needs input.SCRIPTED; 2-6, 10-11, 15-21 and 23 need
     ; levelgen.FORCE_FAIL, 7-8, 12 and 20 (frame budget) need FRAME_STATS. 9 (link replay) needs neither.
     ; 22 (game flow) runs the title screen; every other test skips it. 22 needs neither FORCE_FAIL nor
     ; FRAME_STATS.
@@ -50,6 +50,10 @@ main {
     ; number of finished map rebuilds.
     const bool NAV_DEBUG = false
 
+    ; Self-test: char row 1 cols 0-22 show, for each sprite frame in gen_assets order, 1 + the state of the
+    ; last actor drawn with it (hex; 0 = not seen yet). Player states 0-5, enemy states 0-2 and 7 (warning).
+    const bool POSE_STATS = false
+
     ; [TUNE]
     const ubyte READY_FRAMES = 150      ; READY? pause, 3 s
     const ubyte DISSOLVE_RATE = 8       ; tiles erased per frame at level complete
@@ -58,6 +62,7 @@ main {
 
     sub start() {
         video.init()
+        sound.init()
         levelgen.init()
         title.init()
         video.start_frame_irq()         ; first, so the frame counter counts while generating
@@ -135,6 +140,8 @@ main {
                 debug_hud()
             if NAV_DEBUG
                 nav_debug()
+            if POSE_STATS
+                pose_stats()
             if REGEN_KEY and input.pressed & input.F1 != 0 {
                 load_level()
                 player.init()
@@ -171,6 +178,20 @@ main {
         video.restore_tiles(MSG_ROW, 17, 6)
         player.show_target()
         input.pressed = 0               ; the resume press is not a game input
+    }
+
+    ubyte[assets.SPRITE_COUNT] pose_state
+
+    sub pose_stats() {
+        ubyte i
+        for i in 0 to enemies.LAST {
+            if video.spr_ena & (1 << i) != 0 {
+                ubyte k = video.spr_ptr[i] - assets.SPR_PLAYER_RUN_R_0
+                pose_state[k] = actors.state[i] + 1
+                @(video.SCREEN + 40 + k) = hex_char(pose_state[k])
+                @(video.COLOR_RAM + 40 + k) = video.COLOR_HUD
+            }
+        }
     }
 
     ; ---- frame budget self-test ----
@@ -231,6 +252,7 @@ main {
             video.hide_sprite(i)
         if enemies.kills == 0
             score.add_points(score.NO_KILL_BONUS)
+        sound.play(sound.LEVEL_DONE)
         player.start_float()
         for i in 0 to levelgen.CELLS - 1
             dissolve_order[i] = i
@@ -375,6 +397,8 @@ main {
     ; stands at y = 64. Row 10 is the floor's standing row (y = 160).
     ubyte[] script_kill = [10, input.DOWN, 15, 0, 60, input.DOWN, 0, 0]
     ubyte[] script_none = [0, 0]
+    ubyte[] script_hop = [40, 0, 3, input.FIRE | input.DOWN, 47, 0, 4, input.FIRE, 20, input.DOWN, 30, 0,
+                          4, input.FIRE, 20, input.DOWN, 0, 0]
     ubyte[] script_walk = [40, 0, 40, input.RIGHT, 0, 0]
     ubyte[] script_jump = [10, 0, 30, input.FIRE, 0, 0]
     ubyte[] script_pass = [26, 0, 40, input.RIGHT, 0, 0]
@@ -388,20 +412,20 @@ main {
     ]
     ubyte[] script_drill_stress = [
         30, 0,
-        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
-        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
+        8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN,
+        8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN,
         40, input.LEFT,
-        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
-        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
+        8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN,
+        8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN,
         30, input.FIRE | input.LEFT, 30, input.LEFT,
-        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
-        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
+        8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN,
+        8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN,
         30, input.FIRE | input.RIGHT, 120, input.RIGHT,
-        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
-        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
+        8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN,
+        8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN,
         30, input.FIRE | input.RIGHT, 60, input.RIGHT,
-        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
-        8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0, 8, input.FIRE | input.DOWN, 20, 0,
+        8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN,
+        8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN, 8, input.FIRE, 20, input.DOWN,
         120, input.LEFT, 30, input.FIRE | input.LEFT, 100, input.LEFT, 0, 0
     ]
     ubyte warn_overlap                  ; frames the player's box overlapped an enemy in WARNING
@@ -496,6 +520,11 @@ main {
                 test_put(1, 154, 64, enemies.GROUNDED)
                 test_put(2, 154, 20, enemies.GROUNDED)
                 input.script = &script_kill
+            }
+            23 -> {
+                ; minimum fast-fall distance: on the row-5 platform, a jump with down held (2 px rise) leaves the
+                ; tile intact; a 10 px rise then fast-fall cracks it; the next one destroys it and drills on.
+                input.script = &script_hop
             }
             3 -> {
                 ; stomp: fall straight onto enemy 1 (frozen, so the player keeps bonking it)
@@ -860,7 +889,7 @@ main {
 
     ; ---- TEST 10-11 readout: route history of enemy `track` ----
     ubyte[] script_climb = [30, 0, 26, input.RIGHT, 20, input.FIRE, 25, input.FIRE | input.RIGHT, 10, input.RIGHT, 0, 0]
-    ubyte[] script_drill = [30, 0, 75, input.LEFT | input.DOWN, 20, 0, 10, input.FIRE | input.DOWN, 0, 0]
+    ubyte[] script_drill = [30, 0, 75, input.LEFT | input.DOWN, 20, 0, 8, input.FIRE, 20, input.DOWN, 0, 0]
     ubyte track
     ubyte[8] hist_plat
     ubyte hist_n

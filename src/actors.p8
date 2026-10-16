@@ -22,8 +22,10 @@ actors {
     byte[COUNT] vy                      ; 1/16 px per frame, + = down
     ubyte[COUNT] state
     ubyte[COUNT] facing
-    ubyte[COUNT] anim_frame
-    ubyte[COUNT] anim_timer
+    ubyte[COUNT] @shared anim_frame
+    ubyte[COUNT] @shared anim_timer     ; walk cycle: px moved since the last picture change
+    ubyte[COUNT] @shared anim_x         ; lsb of x at the last walk_anim() call
+    ubyte[COUNT] @shared anim_still     ; frames without moving
 
     ubyte new_frac                      ; second result of advance()
 
@@ -32,6 +34,68 @@ actors {
         ubyte s = frac + speed
         new_frac = s & 15
         return s >> 4
+    }
+
+    asmsub walk_anim(ubyte i @X, ubyte frames @Y, ubyte step @A) clobbers(Y) -> ubyte @A {
+        ; Walk cycle by distance: returns the picture (0 to frames-1) for actor i, the next one every `step` px
+        ; moved. Once per frame while on the ground. Picture 0 (standing) after 4 frames without moving, so slow
+        ; walkers that skip a pixel now and then don't flicker back to it. A jump in position (landing,
+        ; respawn) counts as at most `step` px. Assembly: it runs for every grounded actor every frame.
+        %asm {{
+_step = P8ZP_SCRATCH_B1
+_frames = P8ZP_SCRATCH_REG
+            sta  _step
+            sty  _frames
+            lda  p8b_actors.p8v_x_lsb,x
+            pha
+            sec
+            sbc  p8b_actors.p8v_anim_x,x
+            tay                         ; dx, signed
+            pla
+            sta  p8b_actors.p8v_anim_x,x
+            tya
+            bpl  +
+            eor  #$ff
+            clc
+            adc  #1
++           bne  _moved
+            lda  p8b_actors.p8v_anim_still,x
+            cmp  #4
+            bcs  _stand
+            inc  p8b_actors.p8v_anim_still,x
+            lda  p8b_actors.p8v_anim_frame,x
+            rts
+_stand
+            lda  #0
+            sta  p8b_actors.p8v_anim_frame,x
+            sta  p8b_actors.p8v_anim_timer,x
+            rts
+_moved
+            cmp  _step
+            bcc  +
+            lda  _step
++           clc
+            adc  p8b_actors.p8v_anim_timer,x
+            cmp  _step
+            bcc  _keep
+            sbc  _step                  ; carry is set
+            sta  p8b_actors.p8v_anim_timer,x
+            ldy  p8b_actors.p8v_anim_frame,x
+            iny
+            cpy  _frames
+            bcc  +
+            ldy  #0
++           tya
+            sta  p8b_actors.p8v_anim_frame,x
+            jmp  _done
+_keep
+            sta  p8b_actors.p8v_anim_timer,x
+_done
+            lda  #0
+            sta  p8b_actors.p8v_anim_still,x
+            lda  p8b_actors.p8v_anim_frame,x
+            rts
+        }}
     }
 
     sub solid_at(uword px, ubyte py) -> bool {

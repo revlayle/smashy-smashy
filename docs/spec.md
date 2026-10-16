@@ -118,7 +118,7 @@ Max speed stays under 16 px/f, so collision never tunnels through a tile.
 - **Fall off an edge:** `GROUNDED` with no solid tile under the box → `FALLING`.
 - **Fast-fall:** joystick down held while `RISING`, `FALLING` or `LAUNCHED` → `FASTFALL`, vy = 96. Holding down from before a jump or a walk off an edge counts. Fire is ignored once descending. A fast-fall can't be cancelled: it ends only by landing on an intact platform or the floor (then normal ground control returns) or by killing an enemy (→ `LAUNCHED`, with air control). After a kill, down must be released before it can start another fast-fall, so holding down through a kill gives the full launch; pressing down again during the launch (or the fall after it) fast-falls at once.
 - **Air control:** full left/right control in the air at run speed while rising, falling or launched. **Fast-fall drops straight down:** no horizontal movement until it ends. Aiming is done before pressing down.
-- **Minimum fast-fall distance:** a fast-fall only damages tiles once the player has fast-fallen at least **16 px** since the fast-fall started (`ff_start_y` recorded when entering `FASTFALL`). A shorter fast-fall lands like a normal landing: no damage, no crack, no screen shake. The distance counts from the start of the fast-fall, not from the last destroyed tile, so one dive still drills through several layers. Enemy kills are not affected. **[TUNE]** (Designer decision after phase 7: stops the "drill hop", where jump + down held smashed the platform the player stood on after a 2 px rise.)
+- **Minimum fast-fall distance:** a fast-fall only damages tiles once the player has fast-fallen at least **8 px** since the fast-fall started (`ff_start_y` recorded when entering `FASTFALL`). A shorter fast-fall lands like a normal landing: no damage, no crack, no screen shake. The distance counts from the start of the fast-fall, not from the last destroyed tile, so one dive still drills through several layers. Enemy kills are not affected. **[TUNE]** (Designer decision after phase 7, lowered from 16 px to 8 px after the phase 8 playtest: stops the "drill hop", where jump + down held smashed the platform the player stood on after a 2 px rise.)
 - **Landing in `FASTFALL`** (with the minimum distance met): damage the tile under the box's centre (1 → 2). If it is already damaged (2 → 0, destroyed), the player keeps fast-falling through the hole. The first hit on an intact tile is a normal landing (fast-fall ends). When the tile is destroyed, the box snaps sideways to the centre of the hole (2 px clear each side) so the fall always continues through it, even if the box was straddling two tiles.
 - **Target highlight:** while in the air (any state but `GROUNDED`), the tile a fast-fall from the current position would damage is drawn in `TARGET_COLOR` (white). It is found by dropping the box straight down: the landing row is the first row with a solid tile under either box edge, and the target is the tile under the box centre in that row. Nothing is highlighted when that tile is the floor or empty (the drop would land on an edge, no damage). The highlight follows the player and moves down as tiles are drilled.
 - **Landing in any state:** chain = 0.
@@ -167,6 +167,8 @@ Decisions at most every 8 frames per enemy, staggered so at most one enemy decid
 **Measured after phase 6** (same method, now with treasures on the map): 255-261 lines with 5 live enemies, pickups and carriers; 241 with 5 carriers; 261 while drilling with rebuilds; 0 dropped frames.
 
 **Measured after phase 7** (same method, frame counter instead of the jiffy clock): TEST 7/8/12/20 257/254/260/246 lines without the KERNAL IRQ, 260/257/263/250 with it chained; 0 dropped frames.
+
+**Measured after phase 8** (same method, with walk animation and sound): TEST 7/8/12/20 268/252/254/258 lines; 0 dropped frames.
 
 **Platform map.** Built after level generation, kept in program RAM (BSS and `memory()` slabs, about 6 KB for both table sets):
 - A **platform** is a maximal horizontal run of standing cells (a non-solid cell, empty or treasure, above solid/damaged/floor) on one row. Max 32 platforms; extras are ignored (treated as unreachable). `platform_of[220]` maps each cell to its platform (255 = none). Ids are given in row order, top to bottom.
@@ -260,14 +262,14 @@ PLAYING --10 treasures--> LEVEL_COMPLETE --> LEVEL_START (READY?, level+1, +60 s
 PLAYING --time 0--> GAME_OVER --fire--> TITLE
 ```
 - **TITLE**: needed to seed the RNG and to restart.
-  - **Big title:** SMASHY SMASHY in block letters, one solid block char (full 8x8, add it to the charset) per letter pixel, 5 chars tall. Two lines, "SMASHY" each, the second shifted right (about 25 chars wide each, rows ~3-7 and ~9-13).
-    - The letter shapes are a table of strings in the title code (`#` = block, `.` = empty, 5 rows per letter), so they're easy to redraw.
+  - **Big title:** SMASHY SMASHY in block letters, one char per letter pixel, 5 chars tall. Two lines, "SMASHY" each, the second shifted right (rows ~3-7 and ~10-14). **No drop shadow** (designer: too murky; removed after phase 7).
+    - Letter pixels are a solid block or one of **4 corner triangles**, so letters get rounded corners and smooth diagonals. The triangles are new custom chars matching PETSCII's ◤◥◣◢ (ROM screen codes 105, 95, 223, 233), each exactly half the cell split along the diagonal, all four drawn consistently so neighbouring diagonals line up. (The ROM's reversed versions are offset by a pixel, so don't copy them.)
+    - The letter shapes are a table of strings in the title code, so they're easy to redraw. Symbols use numpad positions for the filled corner: `#` block, `.` empty, `7` ◤ (upper-left half filled), `9` ◥ (upper-right), `1` ◣ (lower-left), `3` ◢ (lower-right). Example S = `3## #.. 9#1 ..# ##7`, A = `3#1 #.# ### #.# #.#`, Y = `#.# 9#7 .#. .#. .#.` (rows left to right, top to bottom). M (5 wide) and H are up to the implementer; check them in a screenshot.
     - Letters are 3 wide except M (5 wide), with 1 column of space between letters.
-    - **Drop shadow:** every letter block casts a shadow block 1 char right and 1 char down, in a fixed dark colour (dark grey, 11). Draw shadows first, letters on top, so a shadow only shows where there's no letter block. Each title line becomes 6 rows tall and 1 column wider (rows ~3-8 and ~10-15). Shadows don't take part in the colour sweep. **[TUNE]** colour and offset.
   - **Character mode:** the title screen uses standard (hi-res) character mode ($D016 bit 4 off) so title blocks can use all 16 colours. Multicolour mode limits single-colour cells to colours 0-7. Gameplay switches multicolour back on.
-  - **Smash-in intro:** when the title screen opens, the 12 letters drop in from above the screen one after another (about 4 frames apart), falling at about 1 char row per frame. A letter's shadow falls and lands with it. Each landing shakes the screen for about 8 frames: alternate the vertical fine scroll ($D011 bits 0-2) between its normal value and 2 px lower. **[TUNE]**
+  - **Smash-in intro:** when the title screen opens, the 12 letters drop in from above the screen one after another (about 4 frames apart), falling at about 1 char row per frame. Each landing shakes the screen for about 8 frames: alternate the vertical fine scroll ($D011 bits 0-2) between its normal value and 2 px lower. **[TUNE]**
     - Implementation (phase 7): the bottom line drops first, so a falling letter never passes through a landed one. Each frame a falling letter moves down one row in a single assembly pass (cells it leaves are cleared, the rest drawn at the new position). The title does its drawing from raster line 180, just below the letters, so it is done before the beam returns to them (worst frame 193 lines from line 180); the frame IRQ writes the fine scroll in the border.
-  - **Rainbow sweep:** after the intro, title block colours cycle every 2 frames through a 16-entry colour table (e.g. 9, 2, 8, 10, 15, 7, 1, 1, 7, 15, 10, 8, 2, 9, 6, 6). Each block's index is `(column + row + phase) & 15`, so the colour bands roll diagonally. Only colour RAM changes, and only for letter blocks: keep a list of their screen offsets (about 130 cells) built when the title is drawn, so shadows and empty cells are never touched. **[TUNE]**
+  - **Rainbow sweep:** after the intro, title block colours cycle every 2 frames through a 16-entry colour table (e.g. 9, 2, 8, 10, 15, 7, 1, 1, 7, 15, 10, 8, 2, 9, 6, 6). Each block's colour index is `(row + phase) & 15`: horizontal colour bands that roll **vertically** through the letters (designer change after phase 7; diagonal bands looked speckled). Triangle cells take the colour of their row like blocks. Only colour RAM changes, and only for letter cells: keep a list of their screen offsets built when the title is drawn, so empty cells are never touched. **[TUNE]**
   - **Text:** "PRESS FIRE" (blinking about once per second) and "HIGH SCORE 000000", hi-res text from the HUD font (chars 0-63 are the ROM screen codes). Fire starts a new game (edge-triggered, so the fire press that ended the last game doesn't start one).
 - **Pause**: Run/Stop toggles pause during PLAYING (edge-triggered, press again to resume). Everything freezes, including the timer; "PAUSED" is shown. Ignored during transitions.
 - **LEVEL_COMPLETE**: enemies vanish. Non-floor tiles are erased in random order, ~8 tiles per frame (about 1 s). The player floats to the start.
@@ -296,6 +298,8 @@ Sprite frames (16x16 art in 24x21 frames). Counts are a starting point; placehol
 | Enemy walk L / R | 3 + 3 |
 | Enemy air L / R | 1 + 1 |
 | **Total** | 23 (of 95 available) |
+
+Run frame 0 doubles as the standing pose. Run and walk cycles advance by distance moved (player: next picture every 6 px, enemies every 5 px) and go back to frame 0 after 4 frames standing still; float alternates every 8 frames. **[TUNE]** Frames of one animation must stay together and in order in `sprites.txt` (the code uses `SPR_<SET>_0 + n`).
 
 Charset (2x2 chars per tile):
 - Solid, damaged and floor platform: 12 chars
@@ -346,6 +350,7 @@ src/enemies.p8     enemy movement, contact, respawn, treasure carry/drop
 src/nav.p8         platform map and navigation AI
 src/levelgen.p8    generation and validation
 src/score.p8       BCD score, timer
+src/sound.p8       SID sound effects (table, stepped by the frame IRQ)
 src/gen_assets.p8  GENERATED by tools/gfx.py: art name constants, tile colors
 assets/            sprites.txt, tiles.txt (editable text art)
 tools/gfx.py       text art -> build/sprites.bin, build/chars.bin, src/gen_assets.p8
@@ -381,7 +386,7 @@ None at the moment.
 - Phase 5b playtest: enemies with no route go as close to the target as they can instead of wandering; enemy jump 80 px (climbs 4-row steps).
 - 3 s pickup cooldown for an enemy that just lost a treasure.
 - Pause on Run/Stop. Session high score in RAM.
-- Fast-fall needs 16 px of fast-fall distance before it can damage a tile (no drill hop from standing).
+- Fast-fall needs 8 px of fast-fall distance before it can damage a tile (no drill hop from standing).
 - Bonks chain: a bonk's bounce can land on another enemy for another bonk. Bonks score nothing and leave the fast-fall kill chain unchanged: they neither advance it nor reset it (only landing on a tile resets it).
 - Enemy AI: platform-map navigation with roles (chasers, ambusher, hunters), built in two phases (5a simple, 5b navigation).
 - Carriers flee to a hideout far from the player. Side contact with a carrier hits the player; only a stomp or kill frees the treasure. No tiring mechanic.
@@ -391,6 +396,7 @@ None at the moment.
 - Carrying enemy: shown by a color change.
 - Art: placeholder art by Claude, in editable text files converted at build time.
 - Sound: left out until milestone 8, then basic SID effects only (no music). Each effect is a small table of SID settings (waveform, envelope, start pitch, pitch slide per frame, length), played on one voice and stepped once per frame by the frame IRQ. Effects: jump, land/damage tile, collect treasure, enemy kill, player hit, level complete.
+  - Implementation (phase 8): `src/sound.p8`, SID voice 1; a new effect cuts the one playing. "Land/damage" sounds only when a fast-fall cracks or destroys a tile; plain landings are silent. Jump sounds only for a jump from the ground (not stomp bounces or kill launches). Values are in the table there. **[TUNE]**
 
 ## 14. Backlog
 

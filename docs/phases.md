@@ -342,7 +342,7 @@ Done when:
 - Code+data `$0801-$584F`, BSS and slabs to `$7A53`. No `floats` import. 40 compiler warnings, all "always true/false", a constant `when`, a removed zero-iteration loop or an unused test variable, from switches.
 
 ## Phase 8: Art, animation and sound
-**Status:** not started
+**Status:** done
 **Spec:** §10 asset table, §13 resolved (sound)
 
 Build:
@@ -351,6 +351,24 @@ Build:
 - Remove or disable all debug switches.
 
 Done when:
-- [ ] All poses from §10 appear in the right states (screenshot set).
-- [ ] Each sound effect triggers on its event (designer checks by ear).
-- [ ] Release build has no debug keys and no scripted input.
+- [x] All poses from §10 appear in the right states (screenshot set).
+- [x] Each sound effect triggers on its event (designer checks by ear).
+- [x] Release build has no debug keys and no scripted input.
+
+**Notes:**
+- Art: all 23 frames from §10 as placeholder art in `assets/sprites.txt` (player run 4+4, jump, fall, fast-fall, float 2; enemy walk 3+3, air). Left frames are mirrors of the right ones, written out in full (the converter is unchanged); redraw both when changing one. Frames of one animation must stay together and in order: the code shows `SPR_<SET>_0 + n`. Run frame 0 is also the standing pose (§10 has no idle frame).
+- Animation (`actors.walk_anim`, assembly): run and walk cycles advance by distance moved, not time, so the feet match the speed: player 4 pictures, one per 6 px (`player.RUN_STEP`); enemies 3 pictures, one per 5 px (`enemies.WALK_STEP`). Back to picture 0 after 4 frames without moving (an enemy at 0.75 px/f skips a pixel every few frames, which would otherwise flicker to the standing pose). Float alternates its 2 pictures every 8 frames (`player.FLOAT_SHIFT`, from the frame counter). An enemy in its warning flicker shows walk picture 0. [TUNE]
+- Sound: new `src/sound.p8`. SID voice 1, one effect at a time; a new one cuts the old. `sound.play()` only stores a request byte; the frame IRQ calls `sound.step()` (assembly), which starts the effect (gate off, ADSR, pitch, gate on), then adds the pitch slide each frame and closes the gate after the effect's length so the release runs. One table column per effect (waveform, AD, SR, start pitch, slide, length), all [TUNE]:
+  - jump: pulse, rising, 10 frames. On every jump from the ground (not on stomp bounces or kill launches).
+  - land/damage: noise thump, 8 frames. When a fast-fall cracks or destroys a tile. Plain landings are silent.
+  - collect: pulse, high and rising, 6 frames. Also for a treasure caught in the air.
+  - kill: saw, falling, 14 frames.
+  - hit: saw, low and falling, 25 frames.
+  - level complete: pulse, slow rise, 50 frames, as the dissolve starts.
+- Sound verified by recording VICE's output to WAV (`-sounddev wav`, real-time run) and measuring the loud stretches: TEST 23 gives the jump only for the 2 px hop, then jump + damage twice; TEST 21 + `COMPLETE_AT = 300` gives kill (15 frames loud), collect (6) and level complete (52); TEST 4 gives the hit (27). Every effect stops on time. The first version had the gate bit inside the waveform values, so the gate never closed and the last effect droned on; the recording found it. For later tests: with `-sounddev dummy` VICE skips the SID, so `$D41C` (ENV3) reads 0.
+- Poses: new self-test switch `main.POSE_STATS` (char row 1: per sprite frame, 1 + the state it was last drawn in). TEST 7 (live enemies, scripted run, hits) showed all 23 frames, each in the right state: run 0-3 L/R grounded, jump R rising and jump L launched, fall falling, fast-fall, float 0-1 floating, enemy walk 0-2 L/R grounded, enemy air rising or falling.
+- Release build: `REGEN_KEY` (F1) is now off; `input.SCRIPTED`, every `TEST`, `FRAME_STATS`, `POSE_STATS`, `FORCE_FAIL` and `FRAME_SEED` are off. The switches stay in the code; the compiler drops what they guard (the generated assembly has no test or script routines). `input.read()` still scans F1 into a bit nothing reads. Deleting the self-test code from `main.p8` would be a separate cleanup.
+- Spec change implemented here (designer decision committed after phase 7, spec §5): a fast-fall only damages tiles after a minimum distance of fast-fall (`player.FF_MIN_DIST`, `ff_start_y`). New TEST 23 (fallback layout): a jump with down held (2 px rise) lands with the tile intact; 8 frames of fire (20 px) then down cracks it; the same again destroys it and the player drops through to the floor. The scripts of TEST 11 and 12 used the 2 px "drill hop" and now rise 8 frames before pressing down. TEST 11 re-run: same result as phase 5b (tile (3, 8) drilled, 1 rebuild, take-offs 5, then 14 and 16).
+- Designer playtest: 16 px felt too high; lowered to 8 px (half a tile). TEST 23 changed to 4 frames of fire (10 px) before down: the 2 px hop still leaves the tile intact, the 10 px hop cracks it, the next destroys it.
+- Frame budget (`FRAME_STATS`, as in phase 7): TEST 7/8/12/20 = 268/252/254/258 lines, 0 dropped frames (phase 7: 257/254/260/246; runs vary with the level; TEST 12 now on the fallback layout). The walk animation written in Prog8 cost about 12 lines (TEST 7: 274 vs 262 with it switched off); the assembly version costs about 5.
+- Code+data `$0801-$5D05`, BSS and slabs to `$7F2D`. No `floats` import. 43 compiler warnings, all from switches ("always true/false", a constant `when`, a removed zero-iteration loop, an unused test variable) plus the old `frames` parameter name in `video.shake`.

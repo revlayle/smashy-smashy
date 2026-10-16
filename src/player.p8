@@ -5,6 +5,7 @@
 %import input
 %import score
 %import nav
+%import sound
 
 player {
     const ubyte GROUNDED = 0
@@ -25,6 +26,11 @@ player {
     const ubyte BOUNCE = 24             ; px
     const ubyte FLOAT_SPEED = 4         ; px per frame along the longer axis
     const ubyte INVULN_FRAMES = 100
+    const ubyte FF_MIN_DIST = 8         ; px of fast-fall before it can damage a tile
+
+    ; [TUNE] animation
+    const ubyte RUN_STEP = 6            ; px moved per run picture (4 pictures)
+    const ubyte FLOAT_SHIFT = 3         ; float pictures change every 2^n frames
 
     const uword START_X = 152 + actors.BOX_INSET    ; sprite at px 152 (tile column 9.5)
     const ubyte START_Y = 0
@@ -33,6 +39,7 @@ player {
     ubyte chain                         ; fast-fall kills this airborne trip (index into the kill points)
     ubyte invuln_timer                  ; frames
     bool down_lock                      ; after a kill, down must be released before it fast-falls again
+    ubyte ff_start_y                    ; box y when the current fast-fall started
 
     ; float back to the start: Bresenham line, one pixel step at a time
     ubyte float_dx
@@ -95,22 +102,26 @@ player {
                     st = RISING
                     rise_left = JUMP_HEIGHT
                     actors.y_frac[0] = 0
+                    sound.play(sound.JUMP)
                 } else if not actors.on_ground(0) {
                     st = FALLING
                     actors.vy[0] = 0
                 }
             }
             RISING -> {
-                if input.held & input.DOWN != 0
+                if input.held & input.DOWN != 0 {
                     st = FASTFALL
-                else if input.held & input.FIRE == 0 {
+                    ff_start_y = actors.y[0]
+                } else if input.held & input.FIRE == 0 {
                     st = FALLING
                     actors.vy[0] = 0
                 }
             }
             FALLING, LAUNCHED -> {
-                if input.held & input.DOWN != 0 and not down_lock
+                if input.held & input.DOWN != 0 and not down_lock {
                     st = FASTFALL
+                    ff_start_y = actors.y[0]
+                }
             }
         }
 
@@ -138,8 +149,9 @@ player {
                 d = actors.advance(actors.y_frac[0], actors.vy[0] as ubyte)
                 actors.y_frac[0] = actors.new_frac
                 if actors.move_down(0, d) {
-                    ; a fast-fall that destroys a damaged tile keeps falling through the hole
-                    if st != FASTFALL or not damage_below() {
+                    ; A fast-fall that destroys a damaged tile keeps falling through the hole. One shorter than
+                    ; FF_MIN_DIST lands like a normal fall (no drill hop from standing).
+                    if st != FASTFALL or actors.y[0] - ff_start_y < FF_MIN_DIST or not damage_below() {
                         st = GROUNDED
                         actors.vy[0] = 0
                         actors.y_frac[0] = 0
@@ -199,6 +211,7 @@ player {
         video.draw_tile(col, row)
         if idx == target_idx
             target_idx = NO_TARGET      ; the redraw removed the highlight
+        sound.play(sound.DAMAGE)
         if video.tiles[idx] != video.T_EMPTY {
             video.shake(video.SHAKE_CRACK)
             return false                ; was solid, now damaged: normal landing
@@ -230,6 +243,7 @@ player {
             video.tiles[idx] = video.T_EMPTY
             video.draw_tile(col, row)
             score.collect(t - video.T_TREASURE)
+            sound.play(sound.COLLECT)
         }
     }
 
@@ -254,6 +268,7 @@ player {
     sub hit() {
         ; Lose time, then float back to the start.
         score.lose_time(score.HIT_PENALTY)
+        sound.play(sound.HIT)
         start_float()
     }
 
@@ -318,11 +333,14 @@ player {
         ubyte frame
         bool left = actors.facing[0] == actors.FACE_LEFT
         when actors.state[0] {
-            GROUNDED -> frame = if left assets.SPR_PLAYER_RUN_L_0 else assets.SPR_PLAYER_RUN_R_0
+            GROUNDED -> {
+                frame = if left assets.SPR_PLAYER_RUN_L_0 else assets.SPR_PLAYER_RUN_R_0
+                frame += actors.walk_anim(0, 4, RUN_STEP)
+            }
             RISING, LAUNCHED -> frame = if left assets.SPR_PLAYER_JUMP_L_0 else assets.SPR_PLAYER_JUMP_R_0
             FALLING -> frame = if left assets.SPR_PLAYER_FALL_L_0 else assets.SPR_PLAYER_FALL_R_0
             FASTFALL -> frame = assets.SPR_PLAYER_FASTFALL_0
-            else -> frame = assets.SPR_PLAYER_FLOAT_0
+            else -> frame = assets.SPR_PLAYER_FLOAT_0 + ((video.frames >> FLOAT_SHIFT) & 1)
         }
         video.set_sprite(0, frame, video.PLAYER_COLOR, actors.x[0] - actors.BOX_INSET, actors.y[0])
     }

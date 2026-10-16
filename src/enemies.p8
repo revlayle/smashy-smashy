@@ -8,6 +8,7 @@
 %import levelgen
 %import video
 %import nav
+%import sound
 
 enemies {
     const ubyte FIRST = 1
@@ -28,6 +29,7 @@ enemies {
     const ubyte MIN_RESPAWN_SECS = 3
     const ubyte WARNING_FRAMES = 50
     const ubyte PICKUP_COOLDOWN = 150   ; frames (3 s) an enemy that lost a treasure can't pick one up
+    const ubyte WALK_STEP = 5           ; px moved per walk picture (3 pictures)
     const ubyte FALL_MASK = 3           ; a dropped treasure falls one tile on frames where (frame & 3) == 0
     const ubyte DECIDE_MASK = 7         ; enemy i may decide on frames where (frame & 7) == i, so one per frame
 
@@ -515,6 +517,7 @@ enemies {
         respawn_timer[i] = respawn_secs
         timer_frames[i] = score.FRAMES_PER_SECOND
         score.add_points(kill_points[player.chain])
+        sound.play(sound.KILL)
         if player.chain < len(kill_points) - 1
             player.chain++
         player.launch_from_kill()
@@ -531,9 +534,10 @@ enemies {
                 continue
             }
             bool left = actors.facing[i] == actors.FACE_LEFT
-            if st == GROUNDED or st == WARNING
+            if st == GROUNDED or st == WARNING {
                 spr = if left assets.SPR_ENEMY_WALK_L_0 else assets.SPR_ENEMY_WALK_R_0
-            else
+                spr += actors.walk_anim(i, 3, WALK_STEP)
+            } else
                 spr = if left assets.SPR_ENEMY_AIR_L_0 else assets.SPR_ENEMY_AIR_R_0
             ubyte color = if carrying[i] != 0 video.ENEMY_CARRY_COLOR else video.ENEMY_COLOR
             video.set_sprite(i, spr, color, actors.x[i] - actors.BOX_INSET, actors.y[i])

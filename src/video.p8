@@ -2,6 +2,7 @@
 ; Never use txt.* routines: they are hard-wired to the $0400 screen.
 
 %import gen_assets
+%import sound
 
 video {
     ; Multicolor or hi-res art. tools/gfx.py reads this line and checks the art files against it.
@@ -308,6 +309,7 @@ video {
         c64.MSIGX = spr_msb
         c64.SPENA = spr_ena
         c64.SCROLY = (c64.SCROLY & %01111000) | scroll_y   ; bit 7 (raster compare bit 8) stays 0
+        sound.step()
         frame_ready = true
         frames++
         return false                    ; no KERNAL IRQ: the game reads the keyboard matrix itself
