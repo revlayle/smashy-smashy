@@ -1,12 +1,12 @@
 ; Title screen (spec section 9): SMASHY SMASHY in block letters smoothed with corner triangles, hi-res
 ; character mode. The letters smash in from above with a screen shake, then rainbow colour bands roll
 ; vertically through them.
-; PRESS FIRE blinks under the title, with the session high score. Fire starts a game and seeds the RNG.
+; PRESS FIRE blinks under the title, with the session high score. Shown for a while between the attract
+; pages (pages.p8) until fire starts a game.
 
 %import video
 %import input
 %import score
-%import levelgen
 
 title {
     ; Letter shapes: '#' = block, '.' = empty, and triangles named by the filled corner like the numpad:
@@ -139,8 +139,8 @@ title {
         widths[sh] = w
     }
 
-    sub run() {
-        ; Show the title until fire is pressed, then seed the RNG.
+    sub run(uword frames) -> bool {
+        ; Show the title (intro first) for the given frames. True if fire was pressed.
         video.set_title_mode()
         ubyte k
         for k in 0 to LETTERS - 1
@@ -158,6 +158,9 @@ title {
         ubyte landed = 0
         ubyte sweep_timer = SWEEP_FRAMES
         ubyte blink = 0
+        uword shown = 0
+        ubyte last = video.frames
+        bool fire = false
         repeat {
             ; once per frame, from the line below the letters (the frame IRQ sets the fine scroll in the border)
             while c64.RASTER != WORK_LINE {
@@ -167,7 +170,14 @@ title {
             video.scroll_y = if shake & 1 != 0 SHAKE_SCROLL else NORMAL_SCROLL
 
             input.read()
-            if input.pressed & input.FIRE != 0
+            if input.pressed & input.FIRE != 0 {
+                fire = true
+                break
+            }
+            ubyte passed = video.frames - last
+            last = video.frames
+            shown += passed
+            if shown >= frames
                 break
 
             if landed < LETTERS {
@@ -201,7 +211,7 @@ title {
                 blink = 0
         }
         video.scroll_y = NORMAL_SCROLL
-        levelgen.seed()
+        return fire
     }
 
     ; move_rows() arguments

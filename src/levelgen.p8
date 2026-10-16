@@ -73,7 +73,7 @@ levelgen {
     }
 
     sub seed() {
-        ; Called when fire starts a game on the title screen (spec section 7).
+        ; Called when fire starts a game on the title or an attract page (spec section 7).
         if FRAME_SEED {
             math.rndseed(mkword(video.frames, $5A), mkword($C3, video.frames))
             return

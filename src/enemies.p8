@@ -313,6 +313,7 @@ enemies {
             return
         ubyte t = video.T_TREASURE + carrying[i] - 1
         carrying[i] = 0
+        nav.hideout[i] = nav.NONE       ; no longer claimed
         cooldown[i] = PICKUP_COOLDOWN
         n_drops++
         ubyte idx = video.row_start[(actors.y[i] + actors.BOX_H / 2) >> 4] + col_of(i)
@@ -520,7 +521,7 @@ enemies {
         respawn_timer[i] = respawn_secs
         timer_frames[i] = score.FRAMES_PER_SECOND
         score.add_points(kill_points[player.chain])
-        popup.show(actors.x[i] + actors.BOX_W / 2, actors.y[i] + actors.BOX_H / 2, kill_points[player.chain], popup.kill_color[player.chain])
+        popup.show(actors.x[i] + actors.BOX_W / 2, actors.y[i] + actors.BOX_H / 2, kill_points[player.chain], player.chain + 1)
         sound.play(sound.KILL)
         if player.chain < len(kill_points) - 1
             player.chain++

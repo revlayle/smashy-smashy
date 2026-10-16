@@ -10,6 +10,7 @@
 %import levelgen
 %import title
 %import popup
+%import pages
 %zeropage basicsafe
 %memtop $C000
 
@@ -34,17 +35,20 @@ main {
     ; counter (ticked by the frame IRQ) counts the whole frames that passed.
     const bool FRAME_STATS = false
     ; Self-test scenario (0 = off). Sets up enemies and the input script after each level load and shows a
-    ; readout on char row 1 (see test_setup and test_hud). Needs input.SCRIPTED; 2-6, 10-11, 15-21 and 23-27 need
-    ; levelgen.FORCE_FAIL, 7-8, 12 and 20 (frame budget) need FRAME_STATS. 9 (link replay) needs neither.
-    ; 22 (game flow) runs the title screen; every other test skips it. 22 needs neither FORCE_FAIL nor
-    ; FRAME_STATS.
+    ; readout on char row 1 (see test_setup and test_hud). Needs input.SCRIPTED; 2-6, 10-11, 15-21, 23-31 and 33 need
+    ; levelgen.FORCE_FAIL, 7-8, 12, 20 and 30 (frame budget) need FRAME_STATS. 9 (link replay) needs neither.
+    ; 22 (game flow) and 34 (attract pages) run the title screen; every other test skips it. 22 and 34 need
+    ; neither FORCE_FAIL nor FRAME_STATS.
     const ubyte TEST = 0
-    const bool SKIP_TITLE = TEST != 0 and TEST != 22
+    const bool SKIP_TITLE = TEST != 0 and TEST != 22 and TEST != 34
     const uword COMPLETE_AT = 0         ; any TEST: play frames until the level counts as complete (0 = off)
     const ubyte LINK_LEVELS = 20        ; TEST 9: levels to check
     const ubyte LINK_HOLES = 0          ; TEST 9: random platform tiles destroyed in each level before the check
     const bool LINK_MAX_SPEED = false   ; TEST 9: enemies at the level-11 speed cap instead of level 1
     const bool STEP_COMB = false        ; TEST 13: time the rebuild on a worst-case layout with many platforms
+    const bool SHARE_SHORT = false      ; TEST 33: the platform is 3 tiles wide instead of 12
+    const bool FLOW_ATTRACT = false     ; TEST 22: no fire on the title after the game over, so the pages cycle
+    const ubyte ATTRACT_FIRE = 1        ; TEST 34: fire on page 1 (title, 3 s in), 2 (HOW TO PLAY, 5 s) or 3 (SCORING, 4 s)
 
     ; Debug view: HUD row shows, per enemy, its platform and its target platform at the last decision
     ; (hex, "ff" = none) and its plan (0 stand, 1 walk to a spot, 2 wander, 3 walk off, 4 jump), then the
@@ -74,11 +78,18 @@ main {
         if SKIP_TITLE
             levelgen.seed()
         if TEST == 22
-            input.script = &script_flow
+            input.script = if FLOW_ATTRACT &script_flow_end else &script_flow
+        if TEST == 34 {
+            when ATTRACT_FIRE {
+                1 -> input.script = &script_fire_title
+                2 -> input.script = &script_fire_how
+                3 -> input.script = &script_fire_scoring
+            }
+        }
 
         repeat {
             if not SKIP_TITLE
-                title.run()             ; returns when fire is pressed, with the RNG seeded
+                attract()               ; returns when fire is pressed, with the RNG seeded
             new_game()
             repeat {
                 level_start()
@@ -88,6 +99,19 @@ main {
             }
             game_over()
         }
+    }
+
+    sub attract() {
+        ; Title, HOW TO PLAY and SCORING in turn until fire starts a game from any of them; then seed the RNG.
+        repeat {
+            if title.run(pages.TITLE_FRAMES)
+                break
+            if pages.how_to_play()
+                break
+            if pages.scoring()
+                break
+        }
+        levelgen.seed()
     }
 
     sub new_game() {
@@ -472,6 +496,16 @@ main {
         150, 0, 5, input.FIRE,
         0, 0
     ]
+    ubyte[] script_flow_end = [
+        120, 0, 5, input.FIRE,
+        40, 0, 2, input.STOP, 150, 0, 2, input.STOP,
+        250, 0, 120, 0, 5, input.FIRE,
+        0, 0
+    ]
+    ; TEST 34: frames from the start of the title (title 500, HOW TO PLAY 500, SCORING 600)
+    ubyte[] script_fire_title = [150, 0, 5, input.FIRE, 0, 0]
+    ubyte[] script_fire_how = [250, 0, 250, 0, 250, 0, 5, input.FIRE, 0, 0]
+    ubyte[] script_fire_scoring = [250, 0, 250, 0, 250, 0, 250, 0, 200, 0, 5, input.FIRE, 0, 0]
     uword play_frames
 
     sub test_frame() {
@@ -481,9 +515,27 @@ main {
             score.treasures_left = 0
         if TEST == 24 {
             if play_frames == 80
-                popup.show(0, 0, $15, popup.TREASURE_COLOR)
-            if play_frames == 81
-                popup.show(319, 191, $32, 2)
+                popup.show(0, 0, $15, popup.TREASURE)
+            if play_frames == 90
+                popup.show(319, 191, $32, 5)
+        }
+        if TEST == 31 {
+            if play_frames == 60 {
+                score.add_points($03)
+                popup.show(160, 100, $03, popup.TREASURE)
+            }
+            if play_frames == 76 {
+                score.add_points($04)
+                popup.show(160, 100, $04, 2)
+            }
+            if play_frames == 200 {
+                score.add_points($05)
+                popup.show(60, 30, $05, popup.TREASURE)
+            }
+            if play_frames == 216 {
+                score.add_points($16)
+                popup.show(60, 30, $16, 4)
+            }
         }
         if TEST == 22 {
             if score.level == 1 and play_frames == 100
@@ -516,7 +568,7 @@ main {
     }
 
     sub test_setup() {
-        if TEST == 22
+        if TEST == 22 or TEST == 34
             return
         if TEST == 1 {
             spawn_soak()
@@ -577,13 +629,76 @@ main {
                 input.script = &script_cover
             }
             24 -> {
-                ; score popups: three treasures in the player's fall, so the third popup takes the oldest slot.
-                ; The player falls centred in column 9 (from the spawn x it would cover no column by 8 px).
-                ; test_frame() adds popups at two playfield corners (clamping).
+                ; score popups: three treasures in the player's fall, collected within 8 frames of each other, so they
+                ; merge into one popup (1800). The player falls centred in column 9 (from the spawn x it would cover
+                ; no column by 8 px). test_frame() adds popups at two playfield corners 10 frames apart (clamping).
                 actors.x[0] = 9 * 16 + 2
                 test_tile(9, 1, video.T_TREASURE + 0)
                 test_tile(9, 2, video.T_TREASURE + 4)
                 test_tile(9, 3, video.T_TREASURE + 11)
+                input.script = &script_none
+            }
+            28 -> {
+                ; popup merge: fast-fall kill on a carrier (700) on the row-5 platform. A treasure (100) fills the
+                ; carrier's cell, so the drop goes into (9, 3), which the player covers: it is collected a frame
+                ; later -> one popup "900" in white. The 100 is collected after the bounce, as its own popup. The
+                ; player falls centred in column 9 (as in TEST 24).
+                actors.x[0] = 9 * 16 + 2
+                test_put(1, 9 * 16 + 2, 64, enemies.GROUNDED)
+                enemies.carrying[1] = 7
+                test_tile(9, 4, video.T_TREASURE + 0)
+                input.script = &script_down
+            }
+            29 -> {
+                ; popup merge: fast-fall onto 3 overlapping enemies on the row-5 platform -> one popup "1400" in
+                ; orange.
+                test_put(1, 152, 64, enemies.GROUNDED)
+                test_put(2, 154, 64, enemies.GROUNDED)
+                test_put(3, 156, 64, enemies.GROUNDED)
+                input.script = &script_down
+            }
+            30 -> {
+                ; popup frame budget (FRAME_STATS): like 29, plus a treasure (1500) collected in the kill frame, so 4
+                ; score events in one frame. All centred in column 9; the enemies are held at y 54, so the kill
+                ; frame is the first one where the player covers the treasure at (9, 3) by 8 px.
+                actors.x[0] = 9 * 16 + 2
+                test_put(1, 9 * 16, 54, enemies.GROUNDED)
+                test_put(2, 9 * 16 + 2, 54, enemies.GROUNDED)
+                test_put(3, 9 * 16 + 4, 54, enemies.GROUNDED)
+                test_tile(9, 3, video.T_TREASURE + 14)
+                for i in 1 to 3
+                    enemies.cooldown[i] = 255  ; they overlap the treasure: no pickup
+                input.script = &script_down
+            }
+            32, 33 -> {
+                ; carriers spread: enemies 1-3 carry from the start, the player waits on the floor at the far left.
+                ; 32: on a generated level (no FORCE_FAIL). 33: the map is cleared to the floor and one platform
+                ; on row 5, columns 4-15 (SHARE_SHORT: 4-6), the only hideout; the carriers start stacked on it.
+                if TEST == 33 {
+                    sys.memset(&video.tiles, levelgen.CELLS, video.T_EMPTY)
+                    for idx in 4 to (if SHARE_SHORT 6 else 15)
+                        video.tiles[video.row_start[5] + idx] = video.T_SOLID
+                    video.draw_level()
+                    nav.new_level()
+                    for i in 1 to 3
+                        test_put(i, 4 * 16 + 2, 64, enemies.GROUNDED)
+                } else {
+                    enemies.place_all()
+                    for i in 4 to 5 {
+                        actors.state[i] = enemies.DEAD
+                        enemies.respawn_timer[i] = 255
+                    }
+                }
+                for i in 1 to 3
+                    enemies.carrying[i] = 1
+                test_put(0, 2, 160, player.GROUNDED)
+                enemies.frozen = false
+                nav.no_mistakes = true
+                input.script = &script_none
+            }
+            31 -> {
+                ; popup stacking: test_frame() shows two popups 16 frames apart at the same spot (the second
+                ; goes above), later two near the HUD row (the second goes below).
                 input.script = &script_none
             }
             23 -> {
@@ -1188,15 +1303,23 @@ main {
     }
 
     sub test_hud() {
+        if TEST == 34
+            return
         if TEST == 22 {
             flow_hud()
             return
         }
-        if TEST == 12 or (FRAME_STATS and (TEST == 7 or TEST == 8 or TEST == 20)) {
+        if TEST == 12 or (FRAME_STATS and (TEST == 7 or TEST == 8 or TEST == 20 or TEST == 30)) {
             ; no readout (it would take too long here, and the next frame would start late): HUD cols 30-35 =
-            ; map rebuilds, dropped frames, col 26 = slowest rebuild in frames
+            ; map rebuilds, dropped frames, col 26 = slowest rebuild in frames. TEST 30: HUD col 0 = most score
+            ; events in one frame, col 1 = most popup digit draws in one frame.
             if TEST == 12
                 player.invuln_timer = 8
+            if TEST == 30 {
+                count_popups()
+                hex_digit(0, most_shows)
+                hex_digit(1, most_draws)
+            }
             hex_byte(30, nav.rebuilds)
             hex_byte(33, video.late_frames)
             hex_byte(26, nav.slowest_build)
@@ -1208,6 +1331,10 @@ main {
         }
         if TEST >= 15 and TEST <= 21 and TEST != 20 {
             carry_hud()
+            return
+        }
+        if TEST == 32 or TEST == 33 {
+            spread_hud()
             return
         }
         ; char row 1: s=player state y=player y c=chain i=invuln frames k/b/h=kills, bonks, hits
@@ -1261,8 +1388,97 @@ main {
             test_text(52, sc:"t")
             test_hex(53, video.tiles[video.row_start[4] + 11])
         }
+        if TEST >= 28 and TEST <= 31
+            popup_hud()
         hex_byte(30, nav.rebuilds)      ; HUD row: map rebuilds this level, dropped frames
         hex_byte(33, video.late_frames)
+    }
+
+    ; ---- TEST 32-33 readout: carriers spread ----
+    ubyte[4] last_hide
+    ubyte[4] hide_changes
+    uword stacked                       ; frames with two carriers on one platform less than 8 px apart
+
+    sub spread_hud() {
+        ; Row 1, per carrier 1-3 (from cols 0, 13, 26): e=its platform (ff = airborne), its hideout, number of
+        ; hideout changes after play frame 250 (5 s), its x. Row 2: z=play frames, s=stacked frames after 250.
+        ubyte i
+        ubyte j
+        ubyte[4] plat
+        for i in 1 to 3 {
+            plat[i] = nav.NONE
+            if actors.state[i] == enemies.GROUNDED
+                plat[i] = nav.platform_under(actors.x[i], actors.y[i], true)
+            if play_frames > 250 and nav.hideout[i] != last_hide[i]
+                hide_changes[i]++
+            last_hide[i] = nav.hideout[i]
+        }
+        if play_frames > 250 {
+            for i in 1 to 2 {
+                for j in i + 1 to 3 {
+                    if plat[i] != nav.NONE and plat[i] == plat[j] and abs_diff(lsb(actors.x[i] >> 1), lsb(actors.x[j] >> 1)) < 4
+                        stacked++
+                }
+            }
+        }
+        if play_frames == 1
+            sys.memset(video.SCREEN + 40, 80, video.CHAR_SPACE)
+        sys.memset(video.COLOR_RAM + 40, 80, video.COLOR_HUD)
+        ubyte col = 0
+        for i in 1 to 3 {
+            test_text(col, sc:"e")
+            test_hex(col + 1, plat[i])
+            test_hex(col + 3, nav.hideout[i])
+            test_hex(col + 6, hide_changes[i])
+            test_hex(col + 8, msb(actors.x[i]))
+            test_hex(col + 10, lsb(actors.x[i]))
+            col += 13
+        }
+        test_text(40, sc:"z")
+        test_hex(41, msb(play_frames))
+        test_hex(43, lsb(play_frames))
+        test_text(46, sc:"s")
+        test_hex(47, msb(stacked))
+        test_hex(49, lsb(stacked))
+    }
+
+    ubyte popup_shows                   ; TEST 28-31
+    ubyte popup_draws
+    ubyte most_shows
+    ubyte most_draws
+
+    sub count_popups() {
+        if popup.n_shows - popup_shows > most_shows
+            most_shows = popup.n_shows - popup_shows
+        if popup.n_draws - popup_draws > most_draws
+            most_draws = popup.n_draws - popup_draws
+        popup_shows = popup.n_shows
+        popup_draws = popup.n_draws
+    }
+
+    sub popup_hud() {
+        ; char row 2: v=popup values (slot 0, 1), r=ranks, y=sprite y, t=timers, m=most score events in one
+        ; frame, d=most digit draws in one frame, z=play frames
+        count_popups()
+        sys.memset(video.COLOR_RAM + 80, 40, video.COLOR_HUD)
+        test_text(40, sc:"v")
+        test_hex(41, popup.value[0])
+        test_hex(43, popup.value[1])
+        test_text(46, sc:"r")
+        test_hex(47, popup.rank[0] << 4 | popup.rank[1])
+        test_text(50, sc:"y")
+        test_hex(51, video.spr_y[popup.FIRST_SPRITE])
+        test_hex(53, video.spr_y[popup.FIRST_SPRITE + 1])
+        test_text(56, sc:"t")
+        test_hex(57, popup.timer[0])
+        test_hex(59, popup.timer[1])
+        test_text(62, sc:"m")
+        test_hex(63, most_shows)
+        test_text(66, sc:"d")
+        test_hex(67, most_draws)
+        test_text(70, sc:"z")
+        test_hex(71, msb(play_frames))
+        test_hex(73, lsb(play_frames))
     }
 
     sub test_text(ubyte col, str text) {

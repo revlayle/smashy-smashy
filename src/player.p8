@@ -250,7 +250,7 @@ player {
             video.tiles[idx] = video.T_EMPTY
             video.draw_tile(col, row)
             score.collect(t - video.T_TREASURE)
-            popup.show(((col as uword) << 4) + 8, (row << 4) + 8, score.treasure_points[t - video.T_TREASURE], popup.TREASURE_COLOR)
+            popup.show(((col as uword) << 4) + 8, (row << 4) + 8, score.treasure_points[t - video.T_TREASURE], popup.TREASURE)
             sound.play(sound.COLLECT)
         }
     }

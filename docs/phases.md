@@ -394,3 +394,43 @@ Enemy hits use a 6 x 13 hurt box (`actors.HURT_INSET = 3`, left, right and top);
 - New TEST 27: treasure at (11, 4). The player stands at x 170 (6 px over the tile) for 60 frames: not collected. One more frame (x 172, 8 px): collected, +100.
 - Regression: TEST 2 (600, 2 kills, 1 bonk), TEST 4 (hit), TEST 16 (drop rests at (10, 4)) and TEST 19 (cooldown, retake at frame $AA) unchanged. **Changed:** TEST 21 now scores 200, not 300. The player stands at the spawn x, 6 px into column 10, so the dropped treasure falls past it and lands next to the player at (10, 4); one step right collects it. TEST 24 collected nothing for the same reason; its player now falls centred in column 9 with all three treasures in that column, and it again shows 100/500/1200 with the third popup taking the oldest slot (score 1800).
 - Code+data `$0801-$6333`, BSS and slabs to `$86C5`. 44 compiler warnings, all from switches. All test switches off.
+
+## Popup merging and stacking (one-off change after phase 8)
+**Status:** done
+**Spec:** §8 "Score feedback" (merging, stacking, drawing at most once per frame)
+
+Score events within 8 frames of the newest popup's latest event add to it (total, life restarted, highest-ranked colour); a new popup that would overlap the other one starts 9 px above it (below if above would rise into the HUD row). Events only mark a slot dirty; `popup.update()` draws the digits once per dirty slot. Verified (scripted input, screenshots, all on `FORCE_FAIL`; new readout on char row 2 for TEST 28-31: popup values, ranks, sprite y, timers, most score events and most digit draws in one frame):
+- Fixed on the way: `popup.show()` had no `rts` after its final `%asm` block (Prog8 adds none there), so every score event ran on into `popup.update()`. With the new `draw()` this re-entered itself and crashed; `draw()` now ends with `return`.
+- New TEST 28: fast-fall kill on a carrier (700) whose drop goes into the cell the player covers (a treasure fills the carrier's own cell): collected the next frame → one white "900", score 900.
+- New TEST 29: fast-fall onto 3 overlapping enemies → one orange "1400" (rank 3), 3 events and 1 draw in that frame.
+- New TEST 30 (`FRAME_STATS`): as 29 plus a 1500 treasure collected in the kill frame → 4 score events and 1 draw in one frame, one orange "2900". Worst frame 217 lines, 0 dropped frames. The per-frame readout is skipped here (it made that frame late); HUD col 0-1 show the event and draw counts.
+- New TEST 31: popups forced 16 frames apart at the same spot: the second starts 9 px above the first; near the HUD row the second starts 9 px below. 20 frames apart (the "Done when" case in the request) they don't stack: the first has risen 10 px, so the second starts 3 px below it, both readable. That follows the stacking rule (closer than 2 px only).
+- A merge restarts the rise, so a popup started at the top limit (y 25) could rise into the HUD row; `update()` now stops the rise at y 0. Checked with 4 events 8 frames apart at y 20 (scratch variant of TEST 31): one "400", top at y 0.
+- HUD score flashes yellow after every event (TEST 28-31 screenshots). Score totals unchanged: TEST 7/8/12/20 give the same scores as the previous version on the same levels.
+- Frame budget (`FRAME_STATS`, `FRAME_SEED`, this version vs the previous one on the same levels): TEST 7/8/12/20 = 269/269/260/257 lines both, 0 dropped frames.
+- Regression: TEST 24 now shows the three falling treasures as one yellow "1800" (merged); its corner popups moved to play frames 80 and 90 so they don't merge, and are still clamped to the edges. TEST 2: 600, 2 kills, 1 bonk, unchanged.
+- Code+data `$0801-$64E6`, BSS and slabs to `$888B`. 48 compiler warnings, all from switches (4 new from the TEST 28-31 checks). All test switches off.
+
+## Carriers spread out (one-off change after phase 8)
+**Status:** done
+**Spec:** §6 "Carrier" (claimed hideouts, near-best pick, keep, spreading when sharing)
+
+Carriers claim their hideouts, pick at random among the unclaimed platforms within 1 hop of the best, keep their hideout while it still qualifies (best-only when the player is near), and spread out by slot when they have to share. `find_hideout()` loops are assembly. Verified (scripted input, screenshots; new readout for TEST 32-33 on char rows 1-2: per carrier its platform, hideout, hideout changes after 5 s and x; play frames; frames with two carriers less than 8 px apart on one platform after 5 s):
+- New TEST 32 (generated level): enemies 1-3 carry from the start, the player waits on the floor at the far left. At 5 s the three hideouts differ in every run (04/05/03, 01/04/00, 01/03/02). At 20 s the carriers stand on 3 different platforms with 0 hideout changes since 5 s (3 runs). Two carriers briefly within 8 px happens only while one passes the other (0-12 frames). In one run a carrier crossing the floor touched the player (an ordinary hit), so the hideouts were re-picked after the player floated back to the start.
+- New TEST 33 (`FORCE_FAIL`): the map is cleared to the floor and one platform, the only hideout; the 3 carriers start stacked on it. 12 tiles: slot 1 at the right end (away from the player), slot 2 at the left end, slot 3 in the middle. `SHARE_SHORT` (3 tiles): right end, middle, left end. 0 stacked frames and 0 hideout changes over 16 s in both.
+- TEST 18 (carrier flees): still flees and never stands on the player's platform. The hideout is now random within the 1-hop margin: one run ended on the floor (2 hops from the player, as before), another on the row-4 platform (1 hop). `NEAR_BEST = 0` would bring back the farthest-only choice.
+- Frame budget (`FRAME_STATS`, `FRAME_SEED`): TEST 7/8/12/20 = 283/260/274/266 lines, 0 dropped frames; the old rule on the same build gave 269/–/260/257 (the TEST 8 readout is lost when the script starts a second game). The first Prog8 version of the search took up to 72 lines and dropped frames in TEST 7 and 12; the assembly version takes up to 51.
+- `enemies.drop()` now clears the hideout, so a carrier that loses its treasure (stomp or kill) frees its claim at once.
+- Code+data `$0801-$674A`, BSS and slabs to `$8B5F`. 49 compiler warnings, all from switches (1 new from the TEST 32-33 setup). All test switches off.
+
+## Attract pages (one-off change after phase 8)
+**Status:** done
+**Spec:** §9 "Attract pages"
+
+Between games the title cycles TITLE (10 s) → HOW TO PLAY (10 s) → SCORING (12 s) → TITLE (first tried 6/6/8 s; the designer wanted more time per page); fire starts a game from any page. New `src/pages.p8` holds both pages and all their text. `title.run()` now takes a duration and returns whether fire was pressed; `main.attract()` runs the cycle and seeds the RNG. SCORING shows the light red and orange chain values with a polled raster split (hi-res character mode from line 170), because multicolour mode can't show colours 8-15 in hi-res cells. Verified with screenshots (release build, scripted input where needed):
+- Timeline from start (10/10/12 s): 5 s TITLE, 15 s HOW TO PLAY, 26 s SCORING, 37 s TITLE; at 32.4 s the intro is replaying (letters falling).
+- New TEST 34 (`ATTRACT_FIRE` = 1/2/3: scripted fire on the title at 3 s, HOW TO PLAY at 15 s, SCORING at 24 s): each starts a game. The READY? screen shows only the player sprite, and play has multicolour tiles, the right sprite colours and no page sprites left.
+- TEST 22 with new `FLOW_ATTRACT` (no fire on the title after the game over): GAME OVER → TITLE → HOW TO PLAY → SCORING with HIGH SCORE 002500 → TITLE.
+- Frame budget (`FRAME_STATS`, `FRAME_SEED`, same levels before and after): TEST 7/12 = 283/274 lines both, 0 dropped frames, same scores.
+- Layout: the brick line's text starts at column 6, the others at column 4 (two brick tiles are 4 columns wide, and ENEMIES STEAL THEM - BONK THEM BACK! needs all 36 columns from column 4).
+- Code+data `$0801-$6D4A`, BSS and slabs to `$917F`. 53 compiler warnings, all from switches (4 new from the TEST 34 checks). All test switches off.

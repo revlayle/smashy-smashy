@@ -1,7 +1,9 @@
 ; Score popups (spec section 8): the points of a score event as hi-res digits in sprites 6 and 7, rising from
-; where it happened. Each slot has its own sprite frame; the digits are drawn into it once, at the event.
+; where it happened. Each slot has its own sprite frame. Events close together in time merge into one popup;
+; a popup that would overlap the other one starts directly above it.
 
 %import video
+%import bcd
 
 popup {
     const ubyte SLOTS = 2
@@ -14,14 +16,23 @@ popup {
     ; [TUNE]
     const ubyte LIFE = 50                       ; frames; rises 1 px every 2 frames
     const ubyte BLINK_AT = 10                   ; the last frames blink, 2 on and 2 off
-    const ubyte TREASURE_COLOR = 7
-    ubyte[5] kill_color = [1, 10, 8, 2, 2]      ; by chain step
+    const ubyte MERGE_FRAMES = 8                ; an event this soon after the newest popup's latest one adds to it
+    const ubyte STACK_GAP = 9                   ; 7 px digits + 2 px gap
+    const ubyte TREASURE = 0                    ; rank of a treasure; a kill's rank is its chain step + 1
+    ubyte[6] rank_color = [7, 1, 10, 8, 2, 2]   ; treasure yellow, then kills by chain step
 
     const ubyte RISE = LIFE / 2
     const uword MAX_X = 320 - 24                ; the whole sprite stays on the playfield
     const ubyte MAX_Y = 192 - 21
 
     ubyte[SLOTS] timer                          ; frames left, 0 = free
+    ubyte[SLOTS] value                          ; BCD hundreds shown
+    ubyte[SLOTS] rank                           ; highest rank merged so far (the colour)
+    uword[SLOTS] pos_x                          ; playfield x of the sprite
+    bool[SLOTS] dirty                           ; digits to draw in update()
+    ubyte newest                                ; slot of the last popup started
+    ubyte n_shows                               ; self-test only: score events, digit draws
+    ubyte n_draws
 
     ; 5x7 digits 0-9 and a blank, one byte per row, pixels in bits 4-0
     ubyte[77] font = [
@@ -64,24 +75,41 @@ popup {
     sub clear() {
         timer[0] = 0
         timer[1] = 0
+        dirty[0] = false
+        dirty[1] = false
         video.spr_ena &= ~(slot_bit[0] | slot_bit[1])
     }
 
-    sub show(uword cx, ubyte cy, ubyte value, ubyte col) {
-        ; value: BCD hundreds ($01-$99), shown as 3 or 4 digits centred on (cx, cy), playfield coordinates.
-        ; Takes a free slot, else the oldest (least time left).
-        ubyte s = 0
+    sub show(uword cx, ubyte cy, ubyte points, ubyte rk) {
+        ; points: BCD hundreds ($01-$99), shown as 3 or 4 digits centred on (cx, cy), playfield coordinates.
+        ; rk: TREASURE or chain step + 1. Only sets the slot up; update() draws the digits, at most once a frame.
+        ; Within MERGE_FRAMES of the newest popup's latest event (a free slot has timer 0, so never): adds to it
+        ; and restarts its life where it is. Otherwise takes a free slot, else the oldest (least time left).
+        n_shows++
+        ubyte s = newest
+        if LIFE - timer[s] <= MERGE_FRAMES {
+            value[s] = bcd.addub(value[s], points)
+            if rk > rank[s] {
+                rank[s] = rk
+                video.spr_col[FIRST_SPRITE + s] = rank_color[rk]
+            }
+            timer[s] = LIFE
+            dirty[s] = true
+            return
+        }
+        s = 0
         if timer[0] != 0 and (timer[1] == 0 or timer[1] < timer[0])
             s = 1
         c64.SPENA &= ~slot_bit[s]               ; a reused slot must not show the new digits at the old spot
+        newest = s
+        value[s] = points
+        rank[s] = rk
+        dirty[s] = true
 
         ; 4 digits fill sprite px 0-22; 3 digits get a blank first digit and fill px 6-22
-        ubyte d0 = value >> 4
         ubyte half = 12
-        if d0 == 0 {
-            d0 = BLANK
+        if points < $10
             half = 14
-        }
         uword x = 0
         if cx > half
             x = cx - half
@@ -92,11 +120,37 @@ popup {
             y = cy - 3
         if y > MAX_Y
             y = MAX_Y
+        ; Closer than 2 px to the other popup: start directly above it, or below if above would rise into the
+        ; HUD row.
+        ubyte o = s ^ 1
+        if timer[o] != 0 {
+            uword dx = x - pos_x[o]
+            if x < pos_x[o]
+                dx = pos_x[o] - x
+            ubyte oy = video.spr_y[FIRST_SPRITE + o] - 58      ; back to playfield y (see video.set_sprite)
+            ubyte dy = y - oy
+            if y < oy
+                dy = oy - y
+            if dx < 24 and dy < STACK_GAP {
+                if oy >= RISE + STACK_GAP
+                    y = oy - STACK_GAP
+                else
+                    y = oy + STACK_GAP
+            }
+        }
+        pos_x[s] = x
         timer[s] = LIFE
-        video.set_sprite(FIRST_SPRITE + s, FRAME_0 + s, col, x, y)
+        video.set_sprite(FIRST_SPRITE + s, FRAME_0 + s, rank_color[rk], x, y)
+    }
 
+    sub draw(ubyte s) {
+        ; The digits of value[s] into slot s's sprite frame (about 15 raster lines).
+        n_draws++
+        ubyte d0 = value[s] >> 4
+        if d0 == 0
+            d0 = BLANK
         ubyte f0 = (d0 << 3) - d0               ; font index: digit * 7
-        ubyte d1 = value & 15
+        ubyte d1 = value[s] & 15
         ubyte f1 = (d1 << 3) - d1
         ; Assembly, unrolled per row and slot (about 230 cycles): Y = f0, X = f1, the row is in the table offsets.
         %asm {{
@@ -130,16 +184,22 @@ _slot1
 _done
             ldx  P8ZP_SCRATCH_REG
         }}
+        return                                  ; Prog8 adds no rts after a sub's final asm block
     }
 
     sub update() {
-        ; Once per play frame. show() set the sprite up; this moves it up and blinks it.
+        ; Once per play frame, after every score event of the frame. show() set the sprite up; this draws its
+        ; digits if they changed, moves it up and blinks it.
         ubyte s
         for s in 0 to SLOTS - 1 {
+            if dirty[s] {
+                dirty[s] = false
+                draw(s)
+            }
             if timer[s] == 0
                 continue
             timer[s]--
-            if timer[s] & 1 == 0
+            if timer[s] & 1 == 0 and video.spr_y[FIRST_SPRITE + s] > 58     ; a merge restarts the rise: stop at y 0
                 video.spr_y[FIRST_SPRITE + s]--
             if timer[s] == 0 or (timer[s] < BLINK_AT and timer[s] & 2 != 0)
                 video.spr_ena &= ~slot_bit[s]

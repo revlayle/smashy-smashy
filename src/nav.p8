@@ -95,7 +95,12 @@ nav {
     ; carrier role
     const ubyte REPLAN_DECISIONS = 4    ; pick the hideout again every 4th decision (32 frames) ...
     const ubyte NEAR_TILES = 5          ; ... or at every decision while the player is this close (Manhattan)
-    ubyte[actors.COUNT] hideout         ; platform id in the front set, NONE = pick one at the next decision
+    const ubyte NEAR_BEST = 1           ; [TUNE] hideout candidates: hops from the player at least best - this
+    ubyte[actors.COUNT] hideout         ; platform id in the front set, NONE = pick one at the next decision;
+                                        ; claimed: other carriers avoid it
+    ubyte[MAX_PLAT] claimed             ; find_hideout(): non-zero = another carrier's hideout (cleared after)
+    ubyte[MAX_PLAT] cand                ; find_hideout(): candidate platforms
+    ubyte[MAX_PLAT] cand_h              ; find_hideout(): their hops from the player's platform
     ubyte[actors.COUNT] replan          ; decisions left until the hideout is picked again
 
     ; self-test and debug readout
@@ -585,8 +590,9 @@ _store
         if p != NONE {
             ubyte dc = abs_diff(enemies.col_of(0), enemies.col_of(i))
             ubyte dr = abs_diff((actors.y[0] + actors.BOX_H / 2) >> 4, (actors.y[i] + actors.BOX_H / 2) >> 4)
-            if p == e or dc + dr <= NEAR_TILES or hideout[i] == NONE or replan[i] == 0 {
-                hideout[i] = find_hideout(e, p)
+            bool near = p == e or dc + dr <= NEAR_TILES
+            if near or hideout[i] == NONE or replan[i] == 0 or shared(i) {
+                hideout[i] = find_hideout(i, e, p, near)
                 replan[i] = REPLAN_DECISIONS
             }
             replan[i]--
@@ -597,8 +603,8 @@ _store
             l = next_link(e, h)
         dbg_target[i] = h
         if l == NONE {
-            ; at the hideout (or no hideout yet): go to the end of the platform away from the player
-            go_to(i, e, if actors.x[0] < actors.x[i] 319 else 0)
+            ; at the hideout (or no hideout yet): wait at an end of the platform
+            go_to(i, e, wait_x(i, e))
             return
         }
         if not no_mistakes and math.rnd() & 63 < mistake_rate() {
@@ -609,38 +615,208 @@ _store
         take_link(i, l)
     }
 
-    sub find_hideout(ubyte e, ubyte p) -> ubyte {
-        ; The platform reachable from e with the most hops from the player's platform p (no route from p counts
-        ; as farthest). Ties go to platforms with more than one outgoing link, then to fewer hops from e (so a
-        ; carrier already at an equally good hideout stays). Leaves out p itself and any platform whose route
-        ; from e starts with a link onto p. Returns e when nothing qualifies.
-        ^^ubyte @zp hrow_e = f_hops + ((e as uword) << 5)
-        ^^ubyte @zp nrow_e = f_next + ((e as uword) << 5)
-        ^^ubyte @zp hrow_p = f_hops + ((p as uword) << 5)
-        ubyte best = NONE
-        ubyte best_h = 0
-        bool best_multi = false
-        ubyte best_he = 0
+    sub shared(ubyte i) -> bool {
+        ; Another carrier claims the same hideout.
+        ubyte h = hideout[i]
+        if h == NONE
+            return false
+        ubyte j
+        for j in enemies.FIRST to enemies.LAST {
+            if j != i and hideout[j] == h and enemies.carrying[j] != 0
+                return true
+        }
+        return false
+    }
+
+    sub find_hideout(ubyte i, ubyte e, ubyte p, bool sharp) -> ubyte {
+        ; Carrier i on platform e, the player on p. Candidates: platforms reachable from e that no other carrier
+        ; claims (all reachable ones if every one is claimed), with hops from p at least the best - NEAR_BEST
+        ; (sharp: the best only; no route from p counts as the most). Platforms with more than one outgoing
+        ; link beat dead ends. Leaves out p itself and any platform whose route from e starts with a link onto
+        ; p. Keeps the current hideout if it is a candidate, else picks one at random. Returns e when nothing
+        ; qualifies.
+        ubyte j
+        for j in enemies.FIRST to enemies.LAST {
+            if j != i and hideout[j] != NONE and enemies.carrying[j] != 0
+                claimed[hideout[j]] = 1
+        }
+        ; Assembly from here on: this runs over every platform at each re-plan. The row addresses are patched
+        ; into the loads.
+        ; Pass 1: the reachable platforms (cand, their hops from p in cand_h), and the most hops from p among
+        ; the unclaimed ones and among all.
+        uword @shared row_e = (e as uword) << 5
+        uword @shared row_p = (p as uword) << 5
+        ubyte @shared n
+        ubyte @shared n_free
+        ubyte @shared best_free
+        ubyte @shared best_all
+        %asm {{
+            lda  p8b_nav.p8v_f_hops
+            clc
+            adc  p8v_row_e
+            sta  _he+1
+            lda  p8b_nav.p8v_f_hops+1
+            adc  p8v_row_e+1
+            sta  _he+2
+            lda  p8b_nav.p8v_f_next
+            clc
+            adc  p8v_row_e
+            sta  _ne+1
+            lda  p8b_nav.p8v_f_next+1
+            adc  p8v_row_e+1
+            sta  _ne+2
+            lda  p8b_nav.p8v_f_hops
+            clc
+            adc  p8v_row_p
+            sta  _hp+1
+            lda  p8b_nav.p8v_f_hops+1
+            adc  p8v_row_p+1
+            sta  _hp+2
+            lda  #0
+            sta  p8v_n
+            sta  p8v_n_free
+            sta  p8v_best_free
+            sta  p8v_best_all
+            ldy  #0                     ; q
+_loop
+            cpy  p8b_nav.p8v_f_count
+            beq  _done
+            cpy  p8v_p
+            beq  _next
+_he         lda  $ffff,y                ; hops from e
+            cmp  #255
+            beq  _next
+            cpy  p8v_e
+            beq  _ok
+_ne         ldx  $ffff,y                ; first link of the route from e
+            lda  p8b_nav.p8v_link_to,x
+            cmp  p8v_p
+            beq  _next
+_ok
+            ldx  p8v_n
+            tya
+            sta  p8b_nav.p8v_cand,x
+_hp         lda  $ffff,y                ; hops from p
+            sta  p8b_nav.p8v_cand_h,x
+            inc  p8v_n
+            cmp  p8v_best_all
+            bcc  +
+            sta  p8v_best_all
++           ldx  p8b_nav.p8v_claimed,y
+            bne  _next
+            inc  p8v_n_free
+            cmp  p8v_best_free
+            bcc  _next
+            sta  p8v_best_free
+_next
+            iny
+            jmp  _loop
+_done
+        }}
+        if n == 0 {
+            sys.memset(&claimed, MAX_PLAT, 0)
+            return e
+        }
+        ubyte @shared lo = best_all
+        if n_free != 0
+            lo = best_free
+        if not sharp {
+            if lo >= NEAR_BEST
+                lo -= NEAR_BEST
+            else
+                lo = 0
+        }
+        ; Pass 2: keep the candidates in place that are unclaimed (if any are) and within the margin.
+        ubyte @shared m
+        ubyte @shared n_multi
+        %asm {{
+            lda  #0
+            sta  p8v_m
+            sta  p8v_n_multi
+            ldx  #0                     ; k
+_loop2
+            cpx  p8v_n
+            beq  _done2
+            lda  p8b_nav.p8v_cand_h,x
+            cmp  p8v_lo
+            bcc  _next2
+            ldy  p8b_nav.p8v_cand,x     ; q
+            lda  p8v_n_free
+            beq  _take2
+            lda  p8b_nav.p8v_claimed,y
+            bne  _next2
+_take2
+            tya
+            stx  P8ZP_SCRATCH_REG
+            ldx  p8v_m
+            sta  p8b_nav.p8v_cand,x
+            inc  p8v_m
+            ldx  P8ZP_SCRATCH_REG
+            clc
+            adc  p8b_nav.p8v_fp
+            tay
+            lda  p8b_nav.p8v_plat_nlinks,y
+            cmp  #2
+            bcc  _next2
+            inc  p8v_n_multi
+_next2
+            inx
+            jmp  _loop2
+_done2
+        }}
         ubyte q
-        for q in 0 to f_count - 1 {
-            if q == p or hrow_e[q] == NONE
-                continue
-            if q != e and link_to[nrow_e[q]] == p
-                continue
-            ubyte h = hrow_p[q]
-            bool multi = plat_nlinks[fp + q] > 1
-            ubyte he = hrow_e[q]
-            if best == NONE or h > best_h
-                    or (h == best_h and (multi and not best_multi or (multi == best_multi and he < best_he))) {
-                best = q
-                best_h = h
-                best_multi = multi
-                best_he = he
+        ubyte k
+        sys.memset(&claimed, MAX_PLAT, 0)
+        if n_multi != 0 and n_multi != m {
+            ; dead ends lose
+            n = m
+            m = 0
+            for k in 0 to n - 1 {
+                q = cand[k]
+                if plat_nlinks[fp + q] > 1 {
+                    cand[m] = q
+                    m++
+                }
             }
         }
-        if best == NONE
-            return e
-        return best
+        q = hideout[i]
+        for k in 0 to m - 1 {
+            if cand[k] == q
+                return q
+        }
+        return cand[levelgen.rand_below(m)]
+    }
+
+    sub wait_x(ubyte i, ubyte e) -> uword {
+        ; Where a carrier waits on platform e: the end away from the player. Carriers sharing it as their
+        ; hideout spread out by slot: the lowest slot takes that end, the next the other end, the third the
+        ; middle (on a platform shorter than 4 tiles: the middle, then the other end). Further ones the middle.
+        uword tx = if actors.x[0] < actors.x[i] 319 else 0
+        ubyte h = hideout[i]
+        if h != e
+            return tx
+        ubyte n = 0                     ; lower slots sharing it
+        ubyte first                     ; the lowest of them
+        ubyte j = enemies.FIRST
+        while j != i {
+            if hideout[j] == h and enemies.carrying[j] != 0 {
+                if n == 0
+                    first = j
+                n++
+            }
+            j++
+        }
+        if n == 0
+            return tx
+        if n <= 2 and plat_end[fp + e] - plat_start[fp + e] < 3
+            n ^= 3                      ; short: 1 <-> 2
+        if n == 1 {
+            if actors.x[0] < actors.x[first]
+                return 0                ; it waits at the right end
+            return 319
+        }
+        uword lo = (plat_start[fp + e] as uword) << 4
+        return (lo + ((plat_end[fp + e] as uword) << 4) + 16 - actors.BOX_W) >> 1
     }
 
     sub nearest_reachable(ubyte e, ubyte t) -> ubyte {
