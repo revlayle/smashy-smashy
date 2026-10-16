@@ -17,7 +17,17 @@ Designer-approved tweak to the score popups (spec §8, `src/popup.p8`). Problem:
 - Clamp to the playfield as before. If stacking above would go into the HUD row, stack below instead (existing y + 9).
 - **[TUNE]** `STACK_GAP = 9`.
 
+## 3. Draw at most once per frame
+
+Drawing a popup's digits costs about 15 raster lines; the worst frame is already 273 of 312. Several score events in one frame (a fast-fall onto 3 overlapping enemies is 3 kills in one frame) must not draw several times.
+
+- A score event only updates the popup's value, colour, life and position, and sets a `dirty` flag on its slot.
+- Digits are drawn once per dirty slot, at one fixed point late in the frame update (after contact checks and treasure pickup). At most 2 draws per frame, and normally 1.
+- This applies to new popups too, not only merges.
+
 ## Done when
+
+- [ ] Worst-case frame: a scripted fast-fall onto 3 overlapping enemies, with a carried treasure collected in the same frame if possible. Measure that frame with `FRAME_STATS` and note it: one digit draw, under 312 lines, 0 dropped frames.
 
 - [ ] Scripted: kill a carrier with a fast-fall and collect its dropped treasure within 8 frames → one popup showing the sum (e.g. 200 + 700 = 900) in the kill colour.
 - [ ] Scripted: a fast-fall onto 3 overlapping enemies → one popup "1400" in the third chain colour.
