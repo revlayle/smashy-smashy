@@ -113,7 +113,7 @@ The project was built with Claude Code, but nothing in it requires Claude:
 - **The workflow** (spec → phases → one session per phase → designer playtests → commit) lives entirely in `docs/`, and works with any agent that can read files, run commands and look at a screenshot.
 - **Smaller or local models** do better with smaller tasks: one phase item at a time, with a build after every change.
 
-For a fresh Prog8 project set up this way from the start, see the separate prog8-ai-kit (not yet public).
+For setting up a fresh Prog8 project this way from the start, there's a separate starter kit, **prog8-ai-kit**. It isn't published yet; Rev. Layle is actively working on releasing it in the near future.
 
 ## Toolchain
 

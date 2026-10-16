@@ -176,7 +176,7 @@ Two bugs in the Prog8 compiler turned up along the way. Both were worked around 
 
 ## 10. A spin-off: prog8-ai-kit
 
-Rev. Layle asked whether this setup could be packaged for other Prog8 developers, whatever AI tool they use, including models running locally, and for the Commander X16 as well as the C64. The reusable parts became a separate starter kit (not yet public):
+Rev. Layle asked whether this setup could be packaged for other Prog8 developers, whatever AI tool they use, including models running locally, and for the Commander X16 as well as the C64. The reusable parts became a separate starter kit. **It isn't published yet**: Rev. Layle is actively working on releasing it in the near future. It contains:
 - a one-command tool installer for Windows, Linux and macOS
 - a simple `p8` command to build, test and screenshot programs
 - project templates any AI tool can follow
