@@ -1,6 +1,6 @@
 # Coding session prompts
 
-Copy-paste prompts for starting Claude Code sessions on this project. Open the session in `C:\Games\c64-platformer-demo`. `CLAUDE.md` loads automatically, so these prompts stay short.
+Copy-paste prompts for starting AI coding sessions on this project. Open the session in the project folder. Claude Code, opencode, Codex and similar agents read `AGENTS.md` automatically, so these prompts stay short; if yours doesn't, start with "Read AGENTS.md first."
 
 ## Start the next phase
 

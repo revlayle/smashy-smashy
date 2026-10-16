@@ -4,7 +4,7 @@ Implementation plan for `docs/spec.md`. Work one phase at a time, in order. Each
 
 ## How to work a phase
 
-1. Read `CLAUDE.md`, then `docs/spec.md` (the whole thing once; afterwards the sections the phase names).
+1. Read `AGENTS.md`, then `docs/spec.md` (the whole thing once; afterwards the sections the phase names).
 2. Pick the first phase whose status is not `done`. Set it to `in progress`.
 3. Implement only that phase's scope. Things the spec defers to later phases stay out.
 4. Verify every "Done when" item (see **Verification** below). Fix until all pass.
