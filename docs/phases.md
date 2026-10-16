@@ -383,3 +383,14 @@ Score popups on sprites 6-7 (`src/popup.p8`), HUD score flash (`score.flash_step
 - Level complete: TEST 24 + `COMPLETE_AT = 120` shows LEVEL COMPLETE, NO KILL BONUS 2500, TIME +60 (score 1800 → 4300, HUD flash), and the active popups are gone. TEST 2 + `COMPLETE_AT = 150` (2 kills) shows no bonus line. The text is on screen for about 100 frames (bisected: 99 ± 2 frames at 1-frame resolution) and READY? then appears on a clean screen.
 - Frame budget (`FRAME_STATS`, `FRAME_SEED` for the same level before and after): TEST 7/8/12/20 = 273/267/263/260 lines (before: 267/265/261/258), 0 dropped frames. A first Prog8-only version cost about 37 lines per popup plus 14 per frame and hit 331 lines (1 dropped frame) once in TEST 12; the font tables, the assembly row loop and a cheaper `update()` brought it to about 15 lines per popup and 5 per frame.
 - Code+data `$0801-$62A5`, BSS and slabs to `$8637`. 44 compiler warnings (one new: the `TEST == 24` check), all from switches. All test switches off.
+
+## Collision tweaks (one-off change after phase 8)
+**Status:** done
+**Spec:** §4 (player hurt box), §5 (treasure coverage rule, hit), §6 (contact rule 3, enemy pickup unchanged)
+
+Enemy hits use a 6 x 13 hurt box (`actors.HURT_INSET = 3`, left, right and top); kill and stomp keep the full box. The player collects a treasure only when the box covers the tile by 8 px on both axes (`player.TREASURE_COVER`); enemy pickup is unchanged. Verified (scripted input, screenshots, all on `FORCE_FAIL`):
+- New TEST 25: the player walks into frozen enemy 1 (x 167) and stands at x 158, 3 px overlap, for 60 frames: no hit. One more frame (x 160, 5 px): hit.
+- New TEST 26: TEST 2 with the enemies 2 px to the side of the falling player: fast-fall kill, bonk, fast-fall kill, 600 points, no hit.
+- New TEST 27: treasure at (11, 4). The player stands at x 170 (6 px over the tile) for 60 frames: not collected. One more frame (x 172, 8 px): collected, +100.
+- Regression: TEST 2 (600, 2 kills, 1 bonk), TEST 4 (hit), TEST 16 (drop rests at (10, 4)) and TEST 19 (cooldown, retake at frame $AA) unchanged. **Changed:** TEST 21 now scores 200, not 300. The player stands at the spawn x, 6 px into column 10, so the dropped treasure falls past it and lands next to the player at (10, 4); one step right collects it. TEST 24 collected nothing for the same reason; its player now falls centred in column 9 with all three treasures in that column, and it again shows 100/500/1200 with the third popup taking the oldest slot (score 1800).
+- Code+data `$0801-$6333`, BSS and slabs to `$86C5`. 44 compiler warnings, all from switches. All test switches off.

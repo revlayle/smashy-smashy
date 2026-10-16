@@ -34,7 +34,7 @@ main {
     ; counter (ticked by the frame IRQ) counts the whole frames that passed.
     const bool FRAME_STATS = false
     ; Self-test scenario (0 = off). Sets up enemies and the input script after each level load and shows a
-    ; readout on char row 1 (see test_setup and test_hud). Needs input.SCRIPTED; 2-6, 10-11, 15-21, 23 and 24 need
+    ; readout on char row 1 (see test_setup and test_hud). Needs input.SCRIPTED; 2-6, 10-11, 15-21 and 23-27 need
     ; levelgen.FORCE_FAIL, 7-8, 12 and 20 (frame budget) need FRAME_STATS. 9 (link replay) needs neither.
     ; 22 (game flow) runs the title screen; every other test skips it. 22 needs neither FORCE_FAIL nor
     ; FRAME_STATS.
@@ -429,6 +429,8 @@ main {
     ubyte[] script_walk = [40, 0, 40, input.RIGHT, 0, 0]
     ubyte[] script_jump = [10, 0, 30, input.FIRE, 0, 0]
     ubyte[] script_pass = [26, 0, 40, input.RIGHT, 0, 0]
+    ubyte[] script_nudge = [40, 0, 3, input.RIGHT, 60, 0, 1, input.RIGHT, 0, 0]
+    ubyte[] script_cover = [40, 0, 11, input.RIGHT, 60, 0, 1, input.RIGHT, 0, 0]
     ubyte[] script_stress = [
         30, 0, 40, input.LEFT, 30, input.FIRE | input.LEFT, 20, input.RIGHT, 30, input.FIRE | input.RIGHT,
         10, input.RIGHT | input.DOWN, 40, input.RIGHT, 30, input.FIRE, 10, input.DOWN, 60, input.LEFT,
@@ -456,6 +458,7 @@ main {
         120, input.LEFT, 30, input.FIRE | input.LEFT, 100, input.LEFT, 0, 0
     ]
     ubyte warn_overlap                  ; frames the player's box overlapped an enemy in WARNING
+    uword hit_x                         ; TEST 25: player x when the first hit happened
     ubyte enemy_inside
 
     ; TEST 22 (game flow), as read by input.read() on the title, in play, while paused and at game over:
@@ -554,11 +557,32 @@ main {
                 test_put(2, 154, 20, enemies.GROUNDED)
                 input.script = &script_kill
             }
+            25 -> {
+                ; hurt box: on the row-5 platform the player walks 3 frames right (x 154 -> 158) and stands with
+                ; 3 px of sideways overlap of frozen enemy 1 (no hit), then 1 frame more (x 160, 5 px) -> hit.
+                test_put(1, 167, 64, enemies.GROUNDED)
+                input.script = &script_nudge
+            }
+            26 -> {
+                ; attacks use the full box: like TEST 2, but the enemies overlap the falling player by only 2 px
+                ; sideways (enemy 2 in the air to the left, enemy 1 on the platform to the right).
+                test_put(1, 164, 64, enemies.GROUNDED)
+                test_put(2, 144, 20, enemies.GROUNDED)
+                input.script = &script_kill
+            }
+            27 -> {
+                ; treasure coverage: a treasure at (11, 4). The player walks 11 frames right on the row-5 platform
+                ; (x 154 -> 170, 6 px over the tile) and stands (not collected), then 1 frame more (x 172, 8 px).
+                test_tile(11, 4, video.T_TREASURE + 0)
+                input.script = &script_cover
+            }
             24 -> {
-                ; score popups: three treasures in the player's fall from the spawn point, so the third popup
-                ; takes the oldest slot. test_frame() adds popups at two playfield corners (clamping).
+                ; score popups: three treasures in the player's fall, so the third popup takes the oldest slot.
+                ; The player falls centred in column 9 (from the spawn x it would cover no column by 8 px).
+                ; test_frame() adds popups at two playfield corners (clamping).
+                actors.x[0] = 9 * 16 + 2
                 test_tile(9, 1, video.T_TREASURE + 0)
-                test_tile(10, 2, video.T_TREASURE + 4)
+                test_tile(9, 2, video.T_TREASURE + 4)
                 test_tile(9, 3, video.T_TREASURE + 11)
                 input.script = &script_none
             }
@@ -1223,6 +1247,20 @@ main {
         test_text(35, sc:"w")
         test_hex(36, warn_overlap)
         test_hex(38, enemy_inside)
+        if TEST >= 25 and TEST <= 27 {
+            ; char row 2: x=player x, a=player x at the first hit, t=tile at (11, 4)
+            if enemies.n_hits != 0 and hit_x == 0
+                hit_x = actors.x[0]
+            sys.memset(video.COLOR_RAM + 80, 40, video.COLOR_HUD)
+            test_text(40, sc:"x")
+            test_hex(41, msb(actors.x[0]))
+            test_hex(43, lsb(actors.x[0]))
+            test_text(46, sc:"a")
+            test_hex(47, msb(hit_x))
+            test_hex(49, lsb(hit_x))
+            test_text(52, sc:"t")
+            test_hex(53, video.tiles[video.row_start[4] + 11])
+        }
         hex_byte(30, nav.rebuilds)      ; HUD row: map rebuilds this level, dropped frames
         hex_byte(33, video.late_frames)
     }

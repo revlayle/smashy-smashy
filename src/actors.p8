@@ -11,6 +11,7 @@ actors {
     const ubyte BOX_W = 12
     const ubyte BOX_H = 16
     const ubyte BOX_INSET = 2           ; box left edge is this far right of the sprite's left edge
+    const ubyte HURT_INSET = 3          ; [TUNE] player hurt box (enemy hits only): the box inset this far left, right and at the top
 
     const ubyte FACE_RIGHT = 0
     const ubyte FACE_LEFT = 1

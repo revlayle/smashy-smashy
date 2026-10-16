@@ -27,6 +27,7 @@ player {
     const ubyte FLOAT_SPEED = 4         ; px per frame along the longer axis
     const ubyte INVULN_FRAMES = 100
     const ubyte FF_MIN_DIST = 8         ; px of fast-fall before it can damage a tile
+    const ubyte TREASURE_COVER = 8      ; px the box must cover a treasure tile on each axis to collect it
 
     ; [TUNE] animation
     const ubyte RUN_STEP = 6            ; px moved per run picture (4 pictures)
@@ -225,15 +226,21 @@ player {
     }
 
     sub collect_treasures() {
-        ; Collect every treasure tile the box overlaps (up to 2 x 2 tiles).
-        ubyte left = lsb(actors.x[0] >> 4)
-        ubyte right = lsb((actors.x[0] + actors.BOX_W - 1) >> 4)
-        ubyte top = actors.y[0] >> 4
-        ubyte bottom = (actors.y[0] + actors.BOX_H - 1) >> 4
-        check_treasure(left, top)
-        check_treasure(right, top)
-        check_treasure(left, bottom)
-        check_treasure(right, bottom)
+        ; Collect the treasure tiles the box covers by at least TREASURE_COVER px on both axes. The 12 px wide
+        ; box covers at most one column that much; the 16 px high box covers one row, or two at 8 px into a tile.
+        ubyte col = lsb(actors.x[0] >> 4)
+        ubyte xo = lsb(actors.x[0]) & 15
+        if xo > 16 - TREASURE_COVER {
+            if xo < 16 + TREASURE_COVER - actors.BOX_W
+                return
+            col++
+        }
+        ubyte row = actors.y[0] >> 4
+        ubyte yo = actors.y[0] & 15
+        if yo <= 16 - TREASURE_COVER
+            check_treasure(col, row)
+        if yo >= TREASURE_COVER
+            check_treasure(col, row + 1)
     }
 
     sub check_treasure(ubyte col, ubyte row) {

@@ -92,6 +92,7 @@ Player-only: `rise_left` (`ubyte` pixels of jump height left, starts at 96), `ch
 
 ### Collision boxes
 - Player and enemies: 12 x 16 box, inset 2 px left and right of the 16 x 16 sprite. This gives 2 px of slack per side, so the player can drop through a 1-tile (16 px) hole without pixel-perfect alignment.
+- Player **hurt box**, used only for getting hit by an enemy (§6 contact rule 3): the player box inset 3 px left, 3 px right and 3 px at the top, so 6 x 13; the bottom edge is the same. Kill, stomp and treasure pickup use the full box. **[TUNE]** (`actors.HURT_INSET`)
 - All actor-vs-actor checks are box overlap math in software. Hardware sprite collision registers are not used.
 
 ## 5. Player
@@ -124,10 +125,10 @@ Max speed stays under 16 px/f, so collision never tunnels through a tile.
 - **Landing in any state:** chain = 0.
 - **Floor (3)** takes no damage.
 - **Screen shake** (designer request, phase 7): a fast-fall that cracks a tile shakes the screen for 4 frames; destroying a tile or killing an enemy shakes it for 8. The vertical fine scroll drops 2 px on alternate frames, and sprites move with it. A new shake restarts the timer if longer than what is left. Visual only. **[TUNE]**
-- **Treasure:** box overlaps a treasure tile → collect: score, clear the tile, `treasures_left -= 1`.
+- **Treasure:** the box covers a treasure tile by **at least 8 px horizontally and at least 8 px vertically** (half the tile on each axis) → collect: score, clear the tile, `treasures_left -= 1`. Resting and falling treasures alike. A fast-fall drilling down a treasure's column still collects it (the box is centred in the hole). Standing or falling at the spawn x (6 px into each of columns 9 and 10) collects nothing until the player moves a step. **[TUNE]** (`player.TREASURE_COVER`; designer decision after phase 8, replaced "any overlap")
 
 ### Hit and float
-- Touching an enemy, other than the stomp/kill cases below, while not invulnerable → hit: `time -= 10 s`, state `FLOATING`.
+- Touching an enemy with the hurt box (§4), other than the stomp/kill cases below, while not invulnerable → hit: `time -= 10 s`, state `FLOATING`.
 - `FLOATING`: fly in a straight line to the start point, ignoring tiles, enemies and input. Moves 4 px/f along the longer axis. The shorter axis is stepped with a Bresenham-style integer error counter (no division), so the path is a true straight line. The farthest possible trip (176 px vertical) takes 44 frames, under 1 s. Treasures already collected stay collected. **[TUNE]**
 - On arrival → `FALLING`, `invuln_timer = 100` frames (2 s), sprite flickers while invulnerable.
 - The timer keeps running while floating after a hit; the lost float time is part of the penalty.
@@ -137,7 +138,9 @@ Max speed stays under 16 px/f, so collision never tunnels through a tile.
 ### Contact with the player (checked in this order)
 1. Player in `FASTFALL`, player's bottom edge in the top half of the enemy box → **kill**: enemy destroyed, any carried treasure dropped, score 2, 4, 8, 16, 32 hundred by chain (§8), `chain += 1` (max 4), player → `LAUNCHED` 32 px.
 2. Player falling (vy > 0, not fast-fall) with the same geometry → **stomp** ("bonk"). Any downward fall counts: the descent of a jump, walking off a ledge, or coming down from a bounce or launch: carried treasure dropped, player bounces 24 px. Enemy survives. No score.
-3. Otherwise → player is hit (unless invulnerable or floating). This includes jumping up into an enemy from below and any side contact.
+3. Otherwise, if the player's **hurt box** (§4) overlaps the enemy box → player is hit (unless invulnerable or floating). This includes jumping up into an enemy from below and any side contact. The sprites must overlap by more than 3 px sideways (or from above) before it counts, so brushing an enemy and moving away is safe. A frame where the full boxes overlap but the hurt box doesn't is no contact.
+
+Rules 1 and 2 use the full player box, so attacking stays generous; only getting hurt is forgiving. (Designer decision after phase 8.)
 
 Bonks are unlimited: an enemy can be bonked again as soon as the player comes back down on it. **Alternate if that feels bad in play:** a bonked enemy is stunned for 1 s (doesn't move, harmless, can't be bonked again, can still be fast-fall killed).
 
@@ -205,7 +208,7 @@ Decisions at most every 8 frames per enemy, staggered so at most one enemy decid
 
 ### Treasure handling
 - An enemy that just lost a treasure can't pick one up for 3 s (`pickup_cooldown`), so the player has a fair chance to grab it.
-- Not carrying, no cooldown, and the box overlaps a treasure tile → pick it up (tile cleared, `carrying = 1 + type`). Shown by a color change: a carrying enemy uses `ENEMY_CARRY_COLOR` instead of `ENEMY_COLOR` (sprite color register $D027+n). No extra frames.
+- Not carrying, no cooldown, and the box overlaps a treasure tile (any overlap; the player's 8 px rule in §5 doesn't apply to enemies) → pick it up (tile cleared, `carrying = 1 + type`). Shown by a color change: a carrying enemy uses `ENEMY_CARRY_COLOR` instead of `ENEMY_COLOR` (sprite color register $D027+n). No extra frames.
 - Dropping: the treasure is placed in the tile at the enemy's centre, or the nearest empty tile above it, then falls one tile every 4 frames until it rests on a solid tile. On top of another treasure it waits and falls on once that cell is empty. A falling treasure is an ordinary treasure tile, so the player or an enemy can take it on the way.
 
 ### Respawn

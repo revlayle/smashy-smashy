@@ -482,6 +482,7 @@ enemies {
     sub contact() {
         ; Checked in order: fast-fall kill, stomp, hit. The player's state from before this check is used for
         ; every enemy, so one fast-fall can kill (or one fall stomp) two overlapping enemies in the same frame.
+        ; Kill and stomp use the full player box; a hit needs the smaller hurt box (HURT_INSET) to overlap too.
         ubyte pst = actors.state[0]
         if pst == player.FLOATING
             return
@@ -501,7 +502,9 @@ enemies {
                 n_bonks++
                 drop(i)
                 player.bounce(actors.y[i])
-            } else if player.invuln_timer == 0 {
+            } else if player.invuln_timer == 0 and actors.x[0] + actors.HURT_INSET < actors.x[i] + actors.BOX_W
+                    and actors.x[i] + actors.HURT_INSET < actors.x[0] + actors.BOX_W
+                    and actors.y[0] + actors.HURT_INSET < actors.y[i] + actors.BOX_H {
                 n_hits++
                 player.hit()
                 return
