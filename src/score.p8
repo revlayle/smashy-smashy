@@ -13,6 +13,11 @@ score {
 
     const uword MAX_POINTS = $9999          ; BCD hundreds, shown as 999900
 
+    ; HUD score flash on every score event [TUNE]. HUD cells are hi-res (colours 0-7).
+    const ubyte FLASH_FRAMES = 8
+    const ubyte FLASH_COLOR = 7             ; yellow: COLOR_HUD is white (1); use 1 if that changes
+    ubyte flash_left
+
     uword points                            ; BCD, in units of 100 points (4 digits, shown with a fixed "00")
     uword time                              ; BCD seconds, 3 digits
     ubyte time_frames                       ; frames left in the current second
@@ -31,6 +36,7 @@ score {
         time_frames = FRAMES_PER_SECOND
         level = 1
         level_bcd = $01
+        flash_left = 0
         video.hud_score(points)
         video.hud_time(time)
         video.hud_level(level_bcd)
@@ -65,6 +71,22 @@ score {
             new_points = MAX_POINTS
         points = new_points
         video.hud_score(points)
+        flash_left = FLASH_FRAMES
+        sys.memset(video.COLOR_RAM + video.HUD_SCORE_COL, 6, FLASH_COLOR)
+    }
+
+    sub flash_step() {
+        ; Once per frame, before anything can score.
+        if flash_left != 0 {
+            flash_left--
+            if flash_left == 0
+                sys.memset(video.COLOR_RAM + video.HUD_SCORE_COL, 6, video.COLOR_HUD)
+        }
+    }
+
+    sub stop_flash() {
+        flash_left = 1
+        flash_step()
     }
 
     sub add_time(uword bcd_seconds) {

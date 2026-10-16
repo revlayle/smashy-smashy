@@ -517,6 +517,7 @@ enemies {
         respawn_timer[i] = respawn_secs
         timer_frames[i] = score.FRAMES_PER_SECOND
         score.add_points(kill_points[player.chain])
+        popup.show(actors.x[i] + actors.BOX_W / 2, actors.y[i] + actors.BOX_H / 2, kill_points[player.chain], popup.kill_color[player.chain])
         sound.play(sound.KILL)
         if player.chain < len(kill_points) - 1
             player.chain++

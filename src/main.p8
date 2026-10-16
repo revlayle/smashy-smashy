@@ -9,6 +9,7 @@
 %import score
 %import levelgen
 %import title
+%import popup
 %zeropage basicsafe
 %memtop $C000
 
@@ -33,7 +34,7 @@ main {
     ; counter (ticked by the frame IRQ) counts the whole frames that passed.
     const bool FRAME_STATS = false
     ; Self-test scenario (0 = off). Sets up enemies and the input script after each level load and shows a
-    ; readout on char row 1 (see test_setup and test_hud). Needs input.SCRIPTED; 2-6, 10-11, 15-21 and 23 need
+    ; readout on char row 1 (see test_setup and test_hud). Needs input.SCRIPTED; 2-6, 10-11, 15-21, 23 and 24 need
     ; levelgen.FORCE_FAIL, 7-8, 12 and 20 (frame budget) need FRAME_STATS. 9 (link replay) needs neither.
     ; 22 (game flow) runs the title screen; every other test skips it. 22 needs neither FORCE_FAIL nor
     ; FRAME_STATS.
@@ -59,12 +60,14 @@ main {
     const ubyte DISSOLVE_RATE = 8       ; tiles erased per frame at level complete
     const ubyte GAME_OVER_WAIT = 50     ; frames before fire returns to the title
     const ubyte MSG_ROW = 12            ; centre of the playfield
+    const ubyte LEVEL_DONE_FRAMES = 100 ; level complete lasts at least 2 s, so its text can be read
 
     sub start() {
         video.init()
         sound.init()
         levelgen.init()
         title.init()
+        popup.init()
         video.start_frame_irq()         ; first, so the frame counter counts while generating
         if GEN_SOAK
             soak()
@@ -131,11 +134,13 @@ main {
             input.read()
             if input.pressed & input.STOP != 0
                 pause()
+            score.flash_step()
             player.update()
             enemies.update()
             enemies.contact()
             player.draw()
             enemies.draw()
+            popup.update()
             if DEBUG_HUD
                 debug_hud()
             if NAV_DEBUG
@@ -245,12 +250,15 @@ main {
     ubyte[levelgen.CELLS] dissolve_order
 
     sub level_complete() {
-        ; Enemies vanish, the platforms dissolve in random order and the player floats back to the start.
-        ; The timer is paused. Then the next level number and +60 s.
+        ; Enemies and popups vanish, the platforms dissolve in random order and the player floats back to the
+        ; start, under the level-complete text (at least LEVEL_DONE_FRAMES). The timer is paused. Then the next
+        ; level number and +60 s.
         ubyte i
         for i in enemies.FIRST to enemies.LAST
             video.hide_sprite(i)
-        if enemies.kills == 0
+        popup.clear()
+        bool bonus = enemies.kills == 0
+        if bonus
             score.add_points(score.NO_KILL_BONUS)
         sound.play(sound.LEVEL_DONE)
         player.start_float()
@@ -258,8 +266,11 @@ main {
             dissolve_order[i] = i
         ubyte n = 0                     ; cells done; the order is shuffled as it goes (Fisher-Yates)
         bool floating = true
-        while n != levelgen.CELLS or floating {
+        ubyte frames = 0
+        while n != levelgen.CELLS or floating or frames < LEVEL_DONE_FRAMES {
             video.wait_frame()
+            frames++
+            score.flash_step()
             repeat DISSOLVE_RATE {
                 if n == levelgen.CELLS
                     break
@@ -280,12 +291,28 @@ main {
                 }
             }
             player.draw()
+            done_text(bonus)            ; over the tiles the dissolve just drew (still in the border)
         }
+        for i in 10 to 14 step 2
+            video.restore_tiles(i, 11, 18)
         score.next_level()
+    }
+
+    sub done_text(bool bonus) {
+        ; Centred lines from char row 10; the values match score.NO_KILL_BONUS and score.LEVEL_TIME_BONUS.
+        video.message(10, 13, sc:"level complete")
+        ubyte row = 12
+        if bonus {
+            video.message(12, 11, sc:"no kill bonus 2500")
+            row = 14
+        }
+        video.message(row, 16, sc:"time +60")
     }
 
     sub game_over() {
         ; Final score and level stay on the HUD row. Fire (after a short wait) returns to the title.
+        popup.clear()
+        score.stop_flash()
         score.update_high()
         video.message(10, 15, sc:"game over")
         video.message(14, 11, sc:"high score")
@@ -449,6 +476,12 @@ main {
         play_frames++
         if COMPLETE_AT != 0 and play_frames == COMPLETE_AT
             score.treasures_left = 0
+        if TEST == 24 {
+            if play_frames == 80
+                popup.show(0, 0, $15, popup.TREASURE_COLOR)
+            if play_frames == 81
+                popup.show(319, 191, $32, 2)
+        }
         if TEST == 22 {
             if score.level == 1 and play_frames == 100
                 score.treasures_left = 0
@@ -520,6 +553,14 @@ main {
                 test_put(1, 154, 64, enemies.GROUNDED)
                 test_put(2, 154, 20, enemies.GROUNDED)
                 input.script = &script_kill
+            }
+            24 -> {
+                ; score popups: three treasures in the player's fall from the spawn point, so the third popup
+                ; takes the oldest slot. test_frame() adds popups at two playfield corners (clamping).
+                test_tile(9, 1, video.T_TREASURE + 0)
+                test_tile(10, 2, video.T_TREASURE + 4)
+                test_tile(9, 3, video.T_TREASURE + 11)
+                input.script = &script_none
             }
             23 -> {
                 ; minimum fast-fall distance: on the row-5 platform, a jump with down held (2 px rise) leaves the

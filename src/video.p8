@@ -121,7 +121,7 @@ video {
 
         if MULTICOLOR {
             c64.SCROLX |= %00010000
-            c64.SPMC = $FF
+            c64.SPMC = %00111111        ; sprites 6-7 (score popups) are hi-res
         } else {
             c64.SCROLX &= %11101111
             c64.SPMC = 0

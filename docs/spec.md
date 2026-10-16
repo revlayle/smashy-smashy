@@ -35,7 +35,7 @@ tile row 11       indestructible floor (char rows 23-24)
 
 ### Graphics modes
 - **Characters: multicolor character mode** ($D016 bit 4). Shared colors: background $D021, MC1 $D022, MC2 $D023. Color RAM values 8-15 make a cell multicolor; 0-7 make it hi-res. So HUD text stays crisp hi-res while tiles get 4 colors. The trade-off: each multicolor tile's own color is limited to the 8 colors 0-7.
-- **Sprites: multicolor sprites** ($D01C), shared colors $D025/$D026, one own color each. Artwork is 16x16 inside the 24x21 sprite frame, top-left aligned. Multicolor pixels are double width, so a 16 px wide figure is 8 fat pixels across.
+- **Sprites: multicolor sprites** ($D01C), shared colors $D025/$D026, one own color each. Artwork is 16x16 inside the 24x21 sprite frame, top-left aligned. Multicolor pixels are double width, so a 16 px wide figure is 8 fat pixels across. Exception: sprites 6 and 7 (score popups, §8) are hi-res ($D01C = `%00111111`).
 - **Multicolor first, hi-res may come later.** Keep the switch cheap: one `const bool MULTICOLOR` in `video.p8` controls $D016 bit 4, $D01C and the color RAM values written for tiles. All colors live in one table in `video.p8`. The art files declare their mode, and the converter (§10) rejects art that doesn't match. Switching modes means redrawing the art; no game logic changes.
 
 ## 3. Memory map
@@ -52,7 +52,7 @@ The VIC-II is moved to **bank 3 ($C000-$FFFF)** so the program gets one contiguo
 | `$CFE0-$CFFF` | **Reserved by Prog8** for virtual registers R0-R15. Do not touch |
 | `$D000-$DFFF` | I/O |
 | `$E000-$E7FF` | Charset (256 chars), in RAM under KERNAL ROM |
-| `$E800-$FFBF` | Sprite frames: 95 frames available (pointer values 160-254, = (addr - $C000) / 64). The last 64 bytes are skipped because they overlap the CPU vectors |
+| `$E800-$FFBF` | Sprite frames: 95 frames available (pointer values 160-254, = (addr - $C000) / 64). The last 64 bytes are skipped because they overlap the CPU vectors. Art from `sprites.txt` starts at 160; frames 253-254 (`$FF40-$FFBF`) are the two score popup frames (§8), drawn at run time |
 
 Notes:
 - The VIC sees RAM at `$E000-$FFFF` even with KERNAL ROM banked in, and CPU *writes* there always go to RAM. So the charset and sprites are copied there once at startup with no ROM banking. They are included in the program with `%asmbinary` and copied from there.
@@ -251,6 +251,19 @@ A level start can take 2-3 seconds (designer decision, phase 5b); the 3 s "READY
   - Treasure type `t` = `t + 1` hundred (100-1500), table `$01`-`$15`.
   - Fast-fall kill = 2, 4, 8, 16, 32 hundred by chain (`$02`, `$04`, `$08`, `$16`, `$32`) → 200 to 3200 in one airborne trip. The chain resets on landing.
   - No-kill bonus: 25 hundred (`$25`, 2500 points) when a level is completed with 0 enemies destroyed.
+
+### Score feedback
+Every score event shows its points where it happened. Implementation: `src/popup.p8`, `score.flash_step()`.
+- **Popups (sprites 6 and 7):** treasure collected → its value (100-1500) in yellow (7); fast-fall kill → the chain value (200-3200), coloured by chain step: 1st white (1), 2nd light red (10), 3rd orange (8), 4th and 5th red (2). **[TUNE]**
+  - The value as hi-res digits only (no "+"). 5x7 font, 5 px per digit + 1 px gap, so 4 digits are 23 px wide. The font is an 11-entry table (digits 0-9 and a blank, 7 bytes each) in `popup.p8`. A 3-digit value is drawn with a blank first digit and the sprite is offset so the digits stay centred.
+  - Each slot has its own sprite frame (253, 254). The digits are drawn into it once, at the event: rows 0-6, 3 bytes per row. `init()` builds pre-shifted copies of the font for the first two digit positions and the constant "00", so a row is two table lookups; the row loop is unrolled assembly (about 15 raster lines per popup including the sprite setup).
+  - Starts centred on the treasure tile's centre or the killed enemy's box centre, clamped so the whole 24x21 sprite stays on the playfield (x 0-296, y up to 171) and the top starts at y ≥ 25, so the rise never reaches the HUD row. Screen shake moves it like every sprite (frame IRQ).
+  - Rises 1 px every 2 frames for 50 frames. Shown for the first 40, then blinks 2 frames on, 2 off, then disabled. **[TUNE]**
+  - A new popup takes a free slot, else the oldest (least time left). A reused slot is switched off in the VIC at once, so the new digits never show at the old spot.
+  - Lower sprite numbers draw on top, so popups pass behind the player and enemies (accepted). They freeze while paused and are removed at level complete and game over.
+- **HUD score flash:** every score event (also the no-kill bonus) turns the 6 HUD score digits yellow (7) for 8 frames, colour RAM only; a new event restarts the 8 frames. HUD cells are hi-res (colours 0-7); the HUD is white, so the flash is yellow (`score.FLASH_COLOR`, white if the HUD colour changes). **[TUNE]**
+- Cost (`FRAME_STATS`, same seed as before the change): TEST 7/8/12/20 = 273/267/263/260 lines (267/265/261/258 without popups), 0 dropped frames.
+
 - Timer: seconds plus a 50-frame subcounter. Starts at 60. +60 on level completion (carried over). -10 per hit, clamped at 0. 0 → game over. Shown as 3 digits.
 - Timer paused during: level-complete dissolve and float, the READY? pause (including generation and drawing).
 
@@ -274,6 +287,8 @@ PLAYING --time 0--> GAME_OVER --fire--> TITLE
 - **Pause**: Run/Stop toggles pause during PLAYING (edge-triggered, press again to resume). Everything freezes, including the timer; "PAUSED" is shown. Ignored during transitions.
 - **LEVEL_COMPLETE**: enemies vanish. Non-floor tiles are erased in random order, ~8 tiles per frame (about 1 s). The player floats to the start.
   - Implementation (phase 7): all 220 non-floor cells in a random order (shuffled as it goes), 8 per frame, so the dissolve takes 28 frames (0.55 s); the state ends when the float has arrived too. The no-kill bonus is added as the dissolve starts.
+  - **Bonus text:** from the start of the dissolve, centred hi-res text on the playfield, same style as READY?: "LEVEL COMPLETE" (char row 10), "NO KILL BONUS 2500" (row 12, only when no enemy was destroyed this level), "TIME +60" (row 12 or 14). The bonus is added (with a HUD flash) as its line appears; the +60 s at the end of the state. The dissolve redraws tiles under the text, so the text is rewritten after the dissolve step each frame (in the border, no flicker). At the end its tiles are restored and READY? replaces it.
+  - The state lasts at least 100 frames (2 s) from the last treasure (`main.LEVEL_DONE_FRAMES`), so the text can be read; the timer stays paused. **[TUNE]**
 - **LEVEL_START** ("READY?" pause), used for every level including the first:
   1. "READY?" appears, hi-res text centred on the playfield. The player sprite stays at the start point (floating pose), with no control. Timer paused.
   2. Generate the next level. Blocking is fine here: nothing animates except the frame IRQ. Then draw it, so the player can see the new layout during the rest of the pause. Place enemies (not yet active).
@@ -351,6 +366,7 @@ src/nav.p8         platform map and navigation AI
 src/levelgen.p8    generation and validation
 src/score.p8       BCD score, timer
 src/sound.p8       SID sound effects (table, stepped by the frame IRQ)
+src/popup.p8       score popups (sprites 6-7, digits drawn into their frames)
 src/gen_assets.p8  GENERATED by tools/gfx.py: art name constants, tile colors
 assets/            sprites.txt, tiles.txt (editable text art)
 tools/gfx.py       text art -> build/sprites.bin, build/chars.bin, src/gen_assets.p8

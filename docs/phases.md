@@ -372,3 +372,14 @@ Done when:
 - Designer playtest: 16 px felt too high; lowered to 8 px (half a tile). TEST 23 changed to 4 frames of fire (10 px) before down: the 2 px hop still leaves the tile intact, the 10 px hop cracks it, the next destroys it.
 - Frame budget (`FRAME_STATS`, as in phase 7): TEST 7/8/12/20 = 268/252/254/258 lines, 0 dropped frames (phase 7: 257/254/260/246; runs vary with the level; TEST 12 now on the fallback layout). The walk animation written in Prog8 cost about 12 lines (TEST 7: 274 vs 262 with it switched off); the assembly version costs about 5.
 - Code+data `$0801-$5D05`, BSS and slabs to `$7F2D`. No `floats` import. 43 compiler warnings, all from switches ("always true/false", a constant `when`, a removed zero-iteration loop, an unused test variable) plus the old `frames` parameter name in `video.shake`.
+
+## Score feedback (one-off change after phase 8)
+**Status:** done
+**Spec:** §2 (sprites 6-7 hi-res), §3 (popup frames 253-254), §8 "Score feedback", §9 LEVEL_COMPLETE bonus text
+
+Score popups on sprites 6-7 (`src/popup.p8`), HUD score flash (`score.flash_step()`), level-complete text with a 2 s minimum. Verified (scripted input, screenshots; VICE needs `+autostart-delay-random` for runs that repeat cycle for cycle):
+- New TEST 24 (`FORCE_FAIL`): three treasures in the player's fall from the spawn point give 100, 500, 1200 in yellow at the treasure spots; the 1200 is 13 px higher 25 frames later. The third popup took the oldest slot (100 gone, 500 and 1200 intact). Popups forced at play frames 80/81 at (0, 0) and (319, 191) are clamped exactly to the playfield edges (top one starts at y 25 and ends below the HUD row).
+- TEST 2: 200 in white, then 400 in light red, both visible together. The first kill is near the top; its popup is clamped and stays below the HUD row. HUD score digits are yellow right after each event and white again afterwards.
+- Level complete: TEST 24 + `COMPLETE_AT = 120` shows LEVEL COMPLETE, NO KILL BONUS 2500, TIME +60 (score 1800 → 4300, HUD flash), and the active popups are gone. TEST 2 + `COMPLETE_AT = 150` (2 kills) shows no bonus line. The text is on screen for about 100 frames (bisected: 99 ± 2 frames at 1-frame resolution) and READY? then appears on a clean screen.
+- Frame budget (`FRAME_STATS`, `FRAME_SEED` for the same level before and after): TEST 7/8/12/20 = 273/267/263/260 lines (before: 267/265/261/258), 0 dropped frames. A first Prog8-only version cost about 37 lines per popup plus 14 per frame and hit 331 lines (1 dropped frame) once in TEST 12; the font tables, the assembly row loop and a cheaper `update()` brought it to about 15 lines per popup and 5 per frame.
+- Code+data `$0801-$62A5`, BSS and slabs to `$8637`. 44 compiler warnings (one new: the `TEST == 24` check), all from switches. All test switches off.
