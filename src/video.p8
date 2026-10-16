@@ -31,6 +31,18 @@ video {
     const ubyte HUD_FONT_CHARS = 64     ; ROM screen codes 0-63: @, A-Z, space, digits, punctuation
     const ubyte CHAR_SPACE = 32
     const ubyte CHAR_BLOCK = 255        ; solid 8x8 block (title letters), set up by init()
+    ; title letter corner triangles (chars 251-254), named by the filled corner like the numpad: 7 = upper left
+    const ubyte CHAR_TRI_7 = 251
+    const ubyte CHAR_TRI_9 = 252
+    const ubyte CHAR_TRI_1 = 253
+    const ubyte CHAR_TRI_3 = 254
+    ; Each half includes the diagonal pixels, the same rule for all four, so diagonals line up across cells.
+    ubyte[32] tri_chars = [
+        $FF, $FE, $FC, $F8, $F0, $E0, $C0, $80,     ; 7: pixel x + row <= 7
+        $FF, $7F, $3F, $1F, $0F, $07, $03, $01,     ; 9: x >= row
+        $80, $C0, $E0, $F0, $F8, $FC, $FE, $FF,     ; 1: x <= row
+        $01, $03, $07, $0F, $1F, $3F, $7F, $FF      ; 3: x + row >= 7
+    ]
 
     ; ---- tile map (spec section 4) ----
     const ubyte MAP_W = 20
@@ -93,6 +105,7 @@ video {
         sys.memcopy(&chars_bin, CHARSET + (assets.TILE_FIRST_CHAR as uword) * 8, (assets.TILE_COUNT as uword) * 32)
         sys.memcopy(&sprites_bin, SPRITE_DATA, (assets.SPRITE_COUNT as uword) * 64)
         sys.memset(CHARSET + (CHAR_BLOCK as uword) * 8, 8, $FF)
+        sys.memcopy(&tri_chars, CHARSET + (CHAR_TRI_7 as uword) * 8, len(tri_chars))
 
         if MULTICOLOR {
             ubyte i
